@@ -25,6 +25,7 @@ class MainActivity: FlutterFragmentActivity() {
     private val SCREENSHOT_CHANNEL = "com.tntlikely.beecount/screenshot"
     private val LOGGER_CHANNEL = "com.beecount.logger"
     private val SHARE_CHANNEL = "com.tntlikely.beecount/share"
+    private val PAYMENT_NOTIFY_CHANNEL = "com.tntlikely.beecount/payment_notification"
 
     private var screenshotObserver: ScreenshotObserver? = null
 
@@ -182,6 +183,46 @@ class MainActivity: FlutterFragmentActivity() {
             LoggerPlugin.warning("MainActivity", "这是一条 WARNING 日志")
             LoggerPlugin.error("MainActivity", "这是一条 ERROR 日志")
         }, 2000)
+
+        // 支付通知自动记账的MethodChannel（支付宝/微信）
+        val paymentChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            PAYMENT_NOTIFY_CHANNEL
+        )
+        PaymentNotificationListener.methodChannel = paymentChannel
+        paymentChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isPermissionGranted" ->
+                    result.success(isNotificationAccessGranted(this@MainActivity))
+                "isServiceConnected" ->
+                    result.success(PaymentNotificationListener.isConnected)
+                "openPermissionSettings" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("NO_SETTINGS", e.message, null)
+                    }
+                }
+                "peekQueue" -> result.success(PaymentNotifyStore.peek(this@MainActivity))
+                "ackEvent" -> {
+                    val id = call.argument<String>("id")
+                    if (id != null) PaymentNotifyStore.ack(this@MainActivity, id)
+                    result.success(true)
+                }
+                "removeEvent" -> result.success(
+                    PaymentNotifyStore.removeById(
+                        this@MainActivity, call.argument<String>("id").orEmpty()
+                    )
+                )
+                "queueCount" -> result.success(PaymentNotifyStore.count(this@MainActivity))
+                "clearQueue" -> {
+                    PaymentNotifyStore.clear(this@MainActivity)
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         // 截图监听的MethodChannel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREENSHOT_CHANNEL).setMethodCallHandler { call, result ->

@@ -9333,4 +9333,82 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get recordingProgressSlow => 'This is taking a little longer. Processing is continuing.';
+
+  @override
+  String get paymentNotifyTitle => 'Payment notification billing';
+
+  @override
+  String get paymentNotifyIntroTitle => 'Bill WeChat/Alipay payments automatically';
+
+  @override
+  String get paymentNotifyIntroBody => 'When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.';
+
+  @override
+  String get paymentNotifyUnsupported => 'Not supported on this platform';
+
+  @override
+  String get paymentNotifyUnsupportedDesc => 'iOS does not allow reading other apps\' notifications. Use bill import or share a screenshot instead.';
+
+  @override
+  String get paymentNotifyEnable => 'Notification auto-billing';
+
+  @override
+  String get paymentNotifyEnableDesc => 'Recognize WeChat Pay and Alipay payment/receipt notifications';
+
+  @override
+  String get paymentNotifyPermissionGranted => 'Notification access granted';
+
+  @override
+  String get paymentNotifyPermissionMissing => 'Notification access missing';
+
+  @override
+  String get paymentNotifyServiceConnected => 'Listener service is running';
+
+  @override
+  String get paymentNotifyServiceNotConnected => 'Granted; waiting for the system to start the listener';
+
+  @override
+  String get paymentNotifyGrantHint => 'Open system settings, find BeeCount and enable notification access';
+
+  @override
+  String get paymentNotifyGrant => 'Grant';
+
+  @override
+  String paymentNotifyQueueTitle(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count pending notifications',
+      one: '1 pending notification',
+      zero: 'No pending notifications',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get paymentNotifyQueueDesc => 'Notifications received in background are queued and recorded when you return or tap Check now';
+
+  @override
+  String get paymentNotifyProcessNow => 'Check now';
+
+  @override
+  String get paymentNotifyRecentTitle => 'Recent auto-recorded';
+
+  @override
+  String get paymentNotifyRecentEmpty => 'No auto-recorded payments yet';
+
+  @override
+  String get paymentNotifyUndo => 'Undo';
+
+  @override
+  String get paymentNotifyUndone => 'Entry removed';
+
+  @override
+  String get paymentNotifyUndoFailed => 'Undo failed';
+
+  @override
+  String get paymentNotifyPrivacy => 'Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.';
+
+  @override
+  String get tagDefaultNotificationBilling => 'Notification billing';
 }

@@ -9325,6 +9325,77 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get recordingProgressSlow => '这次处理时间稍长，仍在继续处理。';
+
+  @override
+  String get paymentNotifyTitle => '支付通知自动记账';
+
+  @override
+  String get paymentNotifyIntroTitle => '微信/支付宝付款，自动记一笔';
+
+  @override
+  String get paymentNotifyIntroBody => '开启后，手机收到微信支付或支付宝的付款/收款通知时，蜜蜂记账会自动识别金额和收支方向，记入当前账本。app 关闭期间收到的通知会在下次打开时补记，时间仍是付款时间。';
+
+  @override
+  String get paymentNotifyUnsupported => '当前平台不支持';
+
+  @override
+  String get paymentNotifyUnsupportedDesc => 'iOS 不允许读取其他 app 的通知，请使用「账单导入」或分享截图记账。';
+
+  @override
+  String get paymentNotifyEnable => '通知自动记账';
+
+  @override
+  String get paymentNotifyEnableDesc => '识别微信支付、支付宝的支付/收款通知';
+
+  @override
+  String get paymentNotifyPermissionGranted => '已获得通知使用权';
+
+  @override
+  String get paymentNotifyPermissionMissing => '缺少「通知使用权」';
+
+  @override
+  String get paymentNotifyServiceConnected => '监听服务运行中';
+
+  @override
+  String get paymentNotifyServiceNotConnected => '已授权，等待系统启动监听服务';
+
+  @override
+  String get paymentNotifyGrantHint => '请在系统设置里找到「蜜蜂记账」，打开「允许读取通知」';
+
+  @override
+  String get paymentNotifyGrant => '去授权';
+
+  @override
+  String paymentNotifyQueueTitle(int count) {
+    return '待处理通知 $count 条';
+  }
+
+  @override
+  String get paymentNotifyQueueDesc => '后台收到的通知会先排队，回到前台或点「立即检查」时补记';
+
+  @override
+  String get paymentNotifyProcessNow => '立即检查';
+
+  @override
+  String get paymentNotifyRecentTitle => '最近自动记账';
+
+  @override
+  String get paymentNotifyRecentEmpty => '还没有自动记账记录';
+
+  @override
+  String get paymentNotifyUndo => '撤销';
+
+  @override
+  String get paymentNotifyUndone => '已撤销这笔记录';
+
+  @override
+  String get paymentNotifyUndoFailed => '撤销失败';
+
+  @override
+  String get paymentNotifyPrivacy => '隐私说明：通知文本仅在本机解析，不会上传；识别规则在本地运行，不调用 AI，也不产生费用。';
+
+  @override
+  String get tagDefaultNotificationBilling => '通知记账';
 }
 
 /// The translations for Chinese, as used in Taiwan (`zh_TW`).

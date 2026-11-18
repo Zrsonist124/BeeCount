@@ -17557,6 +17557,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This is taking a little longer. Processing is continuing.'**
   String get recordingProgressSlow;
+
+  /// No description provided for @paymentNotifyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Payment notification billing'**
+  String get paymentNotifyTitle;
+
+  /// No description provided for @paymentNotifyIntroTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Bill WeChat/Alipay payments automatically'**
+  String get paymentNotifyIntroTitle;
+
+  /// No description provided for @paymentNotifyIntroBody.
+  ///
+  /// In en, this message translates to:
+  /// **'When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.'**
+  String get paymentNotifyIntroBody;
+
+  /// No description provided for @paymentNotifyUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Not supported on this platform'**
+  String get paymentNotifyUnsupported;
+
+  /// No description provided for @paymentNotifyUnsupportedDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'iOS does not allow reading other apps\' notifications. Use bill import or share a screenshot instead.'**
+  String get paymentNotifyUnsupportedDesc;
+
+  /// No description provided for @paymentNotifyEnable.
+  ///
+  /// In en, this message translates to:
+  /// **'Notification auto-billing'**
+  String get paymentNotifyEnable;
+
+  /// No description provided for @paymentNotifyEnableDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Recognize WeChat Pay and Alipay payment/receipt notifications'**
+  String get paymentNotifyEnableDesc;
+
+  /// No description provided for @paymentNotifyPermissionGranted.
+  ///
+  /// In en, this message translates to:
+  /// **'Notification access granted'**
+  String get paymentNotifyPermissionGranted;
+
+  /// No description provided for @paymentNotifyPermissionMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Notification access missing'**
+  String get paymentNotifyPermissionMissing;
+
+  /// No description provided for @paymentNotifyServiceConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Listener service is running'**
+  String get paymentNotifyServiceConnected;
+
+  /// No description provided for @paymentNotifyServiceNotConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Granted; waiting for the system to start the listener'**
+  String get paymentNotifyServiceNotConnected;
+
+  /// No description provided for @paymentNotifyGrantHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Open system settings, find BeeCount and enable notification access'**
+  String get paymentNotifyGrantHint;
+
+  /// No description provided for @paymentNotifyGrant.
+  ///
+  /// In en, this message translates to:
+  /// **'Grant'**
+  String get paymentNotifyGrant;
+
+  /// No description provided for @paymentNotifyQueueTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No pending notifications} =1{1 pending notification} other{{count} pending notifications}}'**
+  String paymentNotifyQueueTitle(int count);
+
+  /// No description provided for @paymentNotifyQueueDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications received in background are queued and recorded when you return or tap Check now'**
+  String get paymentNotifyQueueDesc;
+
+  /// No description provided for @paymentNotifyProcessNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Check now'**
+  String get paymentNotifyProcessNow;
+
+  /// No description provided for @paymentNotifyRecentTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Recent auto-recorded'**
+  String get paymentNotifyRecentTitle;
+
+  /// No description provided for @paymentNotifyRecentEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No auto-recorded payments yet'**
+  String get paymentNotifyRecentEmpty;
+
+  /// No description provided for @paymentNotifyUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get paymentNotifyUndo;
+
+  /// No description provided for @paymentNotifyUndone.
+  ///
+  /// In en, this message translates to:
+  /// **'Entry removed'**
+  String get paymentNotifyUndone;
+
+  /// No description provided for @paymentNotifyUndoFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo failed'**
+  String get paymentNotifyUndoFailed;
+
+  /// No description provided for @paymentNotifyPrivacy.
+  ///
+  /// In en, this message translates to:
+  /// **'Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.'**
+  String get paymentNotifyPrivacy;
+
+  /// No description provided for @tagDefaultNotificationBilling.
+  ///
+  /// In en, this message translates to:
+  /// **'Notification billing'**
+  String get tagDefaultNotificationBilling;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

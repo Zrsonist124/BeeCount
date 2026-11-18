@@ -97,6 +97,24 @@
             android:name="flutterEmbedding"
             android:value="2" />
         
+        <!-- 支付宝/微信支付通知监听：授权「通知使用权」后由系统绑定，
+             把支付通知交给 Dart 侧解析并自动记账（见 PaymentNotificationListener） -->
+        <service
+            android:name=".PaymentNotificationListener"
+            android:label="@string/payment_notify_service_label"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 通知上的「撤销」按钮 -->
+        <receiver
+            android:name=".PaymentNotificationActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <!-- 后台通知接收器 -->
         <receiver android:name=".NotificationReceiver"
             android:enabled="true"

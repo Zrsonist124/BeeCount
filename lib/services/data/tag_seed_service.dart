@@ -126,6 +126,9 @@ class TagSeedService {
   static const String billingTypeCamera = 'camera';
   static const String billingTypeAi = 'ai';
 
+  /// 支付宝/微信支付通知自动记账（见 PaymentNotificationService）
+  static const String billingTypeNotification = 'notification';
+
   /// 获取记账方式对应的标签名称
   static String? getBillingTagName(String billingType, AppLocalizations l10n) {
     switch (billingType) {
@@ -137,6 +140,8 @@ class TagSeedService {
         return l10n.tagDefaultCameraBilling;
       case billingTypeAi:
         return l10n.tagDefaultAiBilling;
+      case billingTypeNotification:
+        return l10n.tagDefaultNotificationBilling;
       default:
         return null;
     }

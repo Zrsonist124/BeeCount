@@ -22,6 +22,7 @@ import 'providers/security_providers.dart';
 import 'services/system/reminder_monitor_service.dart';
 import 'providers/credit_card_reminder_providers.dart';
 import 'services/platform/screenshot_monitor_service.dart';
+import 'services/automation/payment_notification_service.dart';
 import 'services/platform/image_share_handler_service.dart';
 import 'services/platform/app_link_service.dart';
 import 'services/system/logger_service.dart';
@@ -132,6 +133,11 @@ Future<void> main() async {
   // 初始化图片分享处理服务（Android专属）
   if (Platform.isAndroid) {
     _setupImageShareHandler(container);
+  }
+
+  // 初始化支付宝/微信支付通知自动记账（Android专属）
+  if (Platform.isAndroid) {
+    _setupPaymentNotification(container);
   }
 
   // 启动 URL 监听（用于快捷指令/AppLink 自动记账）
@@ -336,6 +342,20 @@ void _setupImageShareHandler(ProviderContainer container) {
   } catch (e) {
     logger.error('App', '❌ [Android] 图片分享处理服务初始化失败', e);
     // 不抛出异常，避免影响应用启动
+  }
+}
+
+/// 设置支付宝/微信支付通知自动记账（Android专属）
+///
+/// 原生 `PaymentNotificationListener` 在系统「通知使用权」授权后持续监听
+/// 微信/支付宝的支付通知并落盘排队；这里启动时把离线排队的通知补记成账单，
+/// 回到前台时再由服务自身的生命周期回调继续补记。
+void _setupPaymentNotification(ProviderContainer container) {
+  try {
+    logger.info('App', '💰 [Android] 初始化支付通知自动记账...');
+    PaymentNotificationService(container).init();
+  } catch (e) {
+    logger.error('App', '❌ 支付通知自动记账初始化失败', e);
   }
 }
 

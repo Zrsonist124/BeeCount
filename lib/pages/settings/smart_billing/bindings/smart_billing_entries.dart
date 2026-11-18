@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../l10n/app_localizations.dart';
 import '../../../ai/ai_settings_page.dart';
 import '../../../automation/auto_billing_settings_page.dart';
+import '../../../automation/payment_notification_settings_page.dart';
 import '../../shortcuts_guide_page.dart';
 import 'smart_billing_dialogs.dart';
 
@@ -102,7 +103,18 @@ class SmartBillingEntries extends ConsumerWidget {
               () => open(const AutoBillingSettingsPage())),
         row('Command', l.shortcutsGuide, l.shortcutsGuideDesc,
             () => open(const ShortcutsGuidePage()))
-      ])
+      ]),
+      // 支付宝/微信支付通知自动记账（仅 Android 可读取通知）
+      if (policy.android) ...[
+        const SizedBox(height: 12),
+        smartBillingCard(context, [
+          row(
+              'Bell',
+              l.paymentNotifyTitle,
+              l.paymentNotifyEnableDesc,
+              () => open(const PaymentNotificationSettingsPage()))
+        ])
+      ]
     ]);
   }
 }

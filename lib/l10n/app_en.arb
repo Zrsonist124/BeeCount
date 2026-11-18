@@ -4724,5 +4724,35 @@
   "recordingProgressRecognizing": "Reading your bill",
   "recordingProgressRecognizingDetail": "Organizing amounts, categories and notes",
   "recordingProgressSavingDetail": "Saving the entries from this recognition",
-  "recordingProgressSlow": "This is taking a little longer. Processing is continuing."
+  "recordingProgressSlow": "This is taking a little longer. Processing is continuing.",
+  "paymentNotifyTitle": "Payment notification billing",
+  "paymentNotifyIntroTitle": "Bill WeChat/Alipay payments automatically",
+  "paymentNotifyIntroBody": "When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.",
+  "paymentNotifyUnsupported": "Not supported on this platform",
+  "paymentNotifyUnsupportedDesc": "iOS does not allow reading other apps' notifications. Use bill import or share a screenshot instead.",
+  "paymentNotifyEnable": "Notification auto-billing",
+  "paymentNotifyEnableDesc": "Recognize WeChat Pay and Alipay payment/receipt notifications",
+  "paymentNotifyPermissionGranted": "Notification access granted",
+  "paymentNotifyPermissionMissing": "Notification access missing",
+  "paymentNotifyServiceConnected": "Listener service is running",
+  "paymentNotifyServiceNotConnected": "Granted; waiting for the system to start the listener",
+  "paymentNotifyGrantHint": "Open system settings, find BeeCount and enable notification access",
+  "paymentNotifyGrant": "Grant",
+  "paymentNotifyQueueTitle": "{count, plural, =0{No pending notifications} =1{1 pending notification} other{{count} pending notifications}}",
+  "@paymentNotifyQueueTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "paymentNotifyQueueDesc": "Notifications received in background are queued and recorded when you return or tap Check now",
+  "paymentNotifyProcessNow": "Check now",
+  "paymentNotifyRecentTitle": "Recent auto-recorded",
+  "paymentNotifyRecentEmpty": "No auto-recorded payments yet",
+  "paymentNotifyUndo": "Undo",
+  "paymentNotifyUndone": "Entry removed",
+  "paymentNotifyUndoFailed": "Undo failed",
+  "paymentNotifyPrivacy": "Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.",
+  "tagDefaultNotificationBilling": "Notification billing"
 }

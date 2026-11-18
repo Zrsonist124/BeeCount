@@ -5,6 +5,7 @@
          覆盖的字符串按 Android 机制回退到 values/ 默认值。 -->
     <string name="app_name">BeeCount</string>
     <string name="app_name_test">BeeCount Test</string>
+    <string name="payment_notify_service_label">BeeCount payment notifications</string>
     <!-- Widget names (android:label in the launcher picker) -->
     <string name="widget_name">Overview (Medium)</string>
     <string name="widget_glance_small_name">Overview (Small)</string>
