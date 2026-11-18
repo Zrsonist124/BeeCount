@@ -1,0 +1,161 @@
+name: Sync upstream and build APK
+
+# 用途：你的仓库只比上游多两个文件（本工作流 + 功能补丁），其他全是上游原样。
+#
+#   1) sync：每天把 TNT-Likely/BeeCount@main 合进你的 main（几乎不会冲突）
+#   2) build：在 main 上应用功能补丁 → 生成 auto-billing 分支 → 构建签名 APK → 发 Release
+#
+# 好处：不需要在本机 clone 1GB 仓库、不需要本地 git；补丁应用失败会红灯，
+# 不会静默丢功能。
+
+on:
+  schedule:
+    # 每天 UTC 20:00 = 北京时间 04:00
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  PATCH_FILE: 0001-feat-auto-billing.patch
+  FEATURE_BRANCH: auto-billing
+
+jobs:
+  sync:
+    name: Merge upstream into main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "beecount-sync-bot"
+          git config user.email "beecount-sync-bot@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/TNT-Likely/BeeCount.git || true
+          git fetch upstream main
+
+      - name: Merge upstream/main
+        run: |
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort || true
+            echo "::error::上游改动与仓库里的文件冲突，需要人工合并"
+            exit 1
+          fi
+
+      - name: Push main
+        run: git push origin HEAD:main
+
+  build:
+    name: Apply feature patch and build
+    needs: sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "beecount-sync-bot"
+          git config user.email "beecount-sync-bot@users.noreply.github.com"
+
+      # 在 main 基础上生成/刷新功能分支；补丁打不上就红灯
+      - name: Apply feature patch
+        run: |
+          git checkout -B "$FEATURE_BRANCH"
+          if git am -3 "$PATCH_FILE"; then
+            echo "applied with git am"
+          else
+            git am --abort || true
+            echo "::warning::git am 失败，改用 git apply --3way"
+            git apply --3way "$PATCH_FILE"
+            git add -A
+            git commit -m "feat(auto-billing): 支付宝/微信支付通知自动记账"
+          fi
+
+      - name: Push feature branch
+        run: git push -f origin "HEAD:$FEATURE_BRANCH"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.3'
+          channel: stable
+          cache: true
+
+      # 固定签名：没配 Secret 时会退回 CI 临时签名，那种包每次签名都不同，
+      # 手机只能卸载重装（账本会丢），仅用于验证构建。
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次用临时签名，无法覆盖升级旧安装"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=../upload-keystore.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # 只分析本功能相关文件：上游自带的 packages/agentcore 测试目录在独立
+      # pub 解析下本来就有几百个报错，全量 analyze 会永远红灯。
+      - name: Analyze (feature files only)
+        run: |
+          flutter analyze --no-fatal-infos \
+            lib/services/automation \
+            lib/providers/payment_notification_providers.dart \
+            lib/pages/automation/payment_notification_settings_page.dart
+
+      - name: Unit tests
+        run: flutter test test/services/automation/payment_notification_parser_test.dart
+
+      - name: Build APK
+        # versionCode 必须递增，否则手机无法覆盖安装；首次 = 301（官方 4.0.0 = 300）
+        run: |
+          flutter build apk --flavor prod --release \
+            --build-name=4.0.0 \
+            --build-number=$((300 + ${{ github.run_number }}))
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: beecount-apk-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/*.apk
+          retention-days: 30
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: BeeCount + 支付通知自动记账 #${{ github.run_number }}
+          body: |
+            自动构建：上游 `TNT-Likely/BeeCount@main` + 功能补丁 `0001-feat-auto-billing.patch`。
+            功能说明见仓库根目录 `0001-feat-auto-billing.patch` 的提交信息。
+          files: build/app/outputs/flutter-apk/*.apk
+          fail_on_unmatched_files: true
