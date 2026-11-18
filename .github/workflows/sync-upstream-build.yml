@@ -135,11 +135,26 @@ jobs:
       - name: Unit tests
         run: flutter test test/services/automation/payment_notification_parser_test.dart
 
+      # 版本号自动跟随上游最新 Release（如 4.0.0 / v4.1.0），拿不到就退回 4.0.0
+      - name: Resolve version name from upstream
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                https://api.github.com/repos/TNT-Likely/BeeCount/releases/latest \
+                | python3 -c "import sys,json;print(json.load(sys.stdin).get('tag_name','').strip())" \
+                || true)
+          NAME=$(echo "$TAG" | sed -E 's/^[vV]//')
+          if [ -z "$NAME" ]; then NAME="4.0.0"; fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "上游版本号 = $NAME"
+
       - name: Build APK
         # versionCode 必须递增，否则手机无法覆盖安装；首次 = 301（官方 4.0.0 = 300）
         run: |
           flutter build apk --flavor prod --release \
-            --build-name=4.0.0 \
+            --build-name=${{ steps.version.outputs.name }} \
             --build-number=$((300 + ${{ github.run_number }}))
 
       - name: Upload artifacts
@@ -153,9 +168,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: BeeCount + 支付通知自动记账 #${{ github.run_number }}
+          name: BeeCount ${{ steps.version.outputs.name }} + 支付通知自动记账 #${{ github.run_number }}
           body: |
-            自动构建：上游 `TNT-Likely/BeeCount@main` + 功能补丁 `0001-feat-auto-billing.patch`。
+            自动构建：上游 `TNT-Likely/BeeCount@main`（versionName ${{ steps.version.outputs.name }}）+ 功能补丁 `0001-feat-auto-billing.patch`。
             功能说明见仓库根目录 `0001-feat-auto-billing.patch` 的提交信息。
           files: build/app/outputs/flutter-apk/*.apk
           fail_on_unmatched_files: true
