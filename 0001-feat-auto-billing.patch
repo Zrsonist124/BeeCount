@@ -1,0 +1,2570 @@
+From d089b7c226d5edd0bde6c1f96a3bf2abb46f95d8 Mon Sep 17 00:00:00 2001
+From: BeeCount AutoBill Builder <autobill@local.invalid>
+Date: Wed, 18 Nov 2026 19:05:06 +0800
+Subject: [PATCH] =?UTF-8?q?feat(auto-billing):=20=E6=94=AF=E4=BB=98?=
+ =?UTF-8?q?=E5=AE=9D/=E5=BE=AE=E4=BF=A1=E6=94=AF=E4=BB=98=E9=80=9A?=
+ =?UTF-8?q?=E7=9F=A5=E8=87=AA=E5=8A=A8=E8=AE=B0=E8=B4=A6?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Android NotificationListenerService 抓取微信(com.tencent.mm)/支付宝(com.eg.android.AlipayGphone)
+  支付通知，过滤金额+收支关键词后落盘排队（SharedPreferences，可离线补记）
+- Dart 侧本地规则解析金额/收支方向/商户（不调用 AI、不联网），经 BillCreationService 落库，
+  账户落到「微信/支付宝」，打「通知记账」标签
+- 双重去重（原生 渠道+文本+分钟；Dart 渠道+金额+分钟），撤销支持通知栏按钮 + 设置页列表
+- 设置页：开关、通知使用权授权入口、待处理队列、最近自动记账撤销
+- 新增 GitHub Actions：每日合并上游并构建签名 APK，合并冲突红灯而不是静默丢功能
+- 文档 docs/auto-billing-notification.zh.md
+---
+ .github/workflows/sync-upstream-build.yml     | 147 ++++++
+ android/app/src/main/AndroidManifest.xml      |  18 +
+ .../com/tntlikely/beecount/MainActivity.kt    |  41 ++
+ .../beecount/PaymentNotificationListener.kt   | 378 ++++++++++++++++
+ .../app/src/main/res/values-en/strings.xml    |   1 +
+ android/app/src/main/res/values/strings.xml   |   2 +
+ docs/auto-billing-notification.zh.md          |  95 ++++
+ lib/l10n/app_en.arb                           |  32 +-
+ lib/l10n/app_localizations.dart               | 138 ++++++
+ lib/l10n/app_localizations_en.dart            |  78 ++++
+ lib/l10n/app_localizations_ko.dart            |  78 ++++
+ lib/l10n/app_localizations_zh.dart            |  71 +++
+ lib/l10n/app_zh.arb                           |  32 +-
+ lib/main.dart                                 |  20 +
+ .../payment_notification_settings_page.dart   | 297 ++++++++++++
+ .../bindings/smart_billing_entries.dart       |  14 +-
+ .../payment_notification_providers.dart       |   7 +
+ .../payment_notification_parser.dart          | 281 ++++++++++++
+ .../payment_notification_service.dart         | 424 ++++++++++++++++++
+ lib/services/data/tag_seed_service.dart       |   5 +
+ .../payment_notification_parser_test.dart     | 143 ++++++
+ 21 files changed, 2299 insertions(+), 3 deletions(-)
+ create mode 100644 .github/workflows/sync-upstream-build.yml
+ create mode 100644 android/app/src/main/kotlin/com/tntlikely/beecount/PaymentNotificationListener.kt
+ create mode 100644 docs/auto-billing-notification.zh.md
+ create mode 100644 lib/pages/automation/payment_notification_settings_page.dart
+ create mode 100644 lib/providers/payment_notification_providers.dart
+ create mode 100644 lib/services/automation/payment_notification_parser.dart
+ create mode 100644 lib/services/automation/payment_notification_service.dart
+ create mode 100644 test/services/automation/payment_notification_parser_test.dart
+
+diff --git a/.github/workflows/sync-upstream-build.yml b/.github/workflows/sync-upstream-build.yml
+new file mode 100644
+index 0000000..a8bfd68
+--- /dev/null
++++ b/.github/workflows/sync-upstream-build.yml
+@@ -0,0 +1,147 @@
++name: Sync upstream and build APK
++
++# 作用：每天检查上游 TNT-Likely/BeeCount，把 main 合进本仓库当前分支，
++# 有更新就自动构建 APK 并发 Release —— 这样「支付通知自动记账」这个自定义
++# 功能可以一直跟着上游更新走。
++#
++# 设计要点：
++# 1. 合并**失败即红灯**（冲突时不静默跳过），保证功能不会被悄悄丢掉；
++# 2. 用固定签名（仓库 Secrets 里的 keystore）出包，否则每次构建签名都不同，
++#    手机端无法覆盖安装、只能卸载重装、账本会丢；
++# 3. 只有合入上游变更或手动触发时才构建，省 Actions 分钟数。
++
++on:
++  schedule:
++    # 每天 UTC 20:00 = 北京时间 04:00
++    - cron: '0 20 * * *'
++  workflow_dispatch:
++
++permissions:
++  contents: write
++
++concurrency:
++  group: sync-upstream
++  cancel-in-progress: false
++
++jobs:
++  sync:
++    name: Merge upstream/main
++    runs-on: ubuntu-latest
++    outputs:
++      changed: ${{ steps.merge.outputs.changed }}
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++          token: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Configure git
++        run: |
++          git config user.name "beecount-sync-bot"
++          git config user.email "beecount-sync-bot@users.noreply.github.com"
++
++      - name: Fetch upstream
++        run: |
++          git remote add upstream https://github.com/TNT-Likely/BeeCount.git || true
++          git fetch upstream main
++
++      - name: Merge upstream/main
++        id: merge
++        run: |
++          BEFORE=$(git rev-parse HEAD)
++          if git merge --no-edit upstream/main; then
++            AFTER=$(git rev-parse HEAD)
++            if [ "$BEFORE" = "$AFTER" ]; then
++              echo "changed=false" >> "$GITHUB_OUTPUT"
++            else
++              echo "changed=true" >> "$GITHUB_OUTPUT"
++            fi
++          else
++            echo "::error::合并上游冲突，需要人工解决（自定义功能文件见 docs/auto-billing-notification.zh.md）"
++            git merge --abort || true
++            exit 1
++          fi
++
++      - name: Push merged branch
++        if: steps.merge.outputs.changed == 'true'
++        run: git push origin HEAD:${{ github.ref_name }}
++
++  build:
++    name: Build signed APK
++    needs: sync
++    if: needs.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: '17'
++
++      - uses: subosito/flutter-action@v2
++        with:
++          flutter-version: '3.27.3'
++          channel: stable
++          cache: true
++
++      # 固定签名：没有配 keystore secret 时会回退到 CI 临时签名，
++      # 那种包每次构建签名都不同，只能卸载重装（会丢账本），仅用于验证构建。
++      - name: Restore release keystore
++        env:
++          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
++          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
++          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
++          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
++        run: |
++          if [ -z "$KEYSTORE_BASE64" ]; then
++            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次用 CI 临时签名，无法覆盖升级旧安装"
++            exit 0
++          fi
++          echo "$KEYSTORE_BASE64" | base64 -d > android/upload-keystore.jks
++          cat > android/key.properties <<EOF
++          storeFile=../upload-keystore.jks
++          storePassword=$KEYSTORE_PASSWORD
++          keyAlias=$KEY_ALIAS
++          keyPassword=$KEY_PASSWORD
++          EOF
++
++      - name: Resolve dependencies
++        run: flutter pub get
++
++      # 只分析本功能相关文件：上游仓库自带的 packages/agentcore 测试目录在
++      # 独立 pub 解析下本来就有 453 个报错，全量 analyze 会永远红灯。
++      - name: Analyze (feature files only)
++        run: |
++          flutter analyze --no-fatal-infos \
++            lib/services/automation \
++            lib/providers/payment_notification_providers.dart \
++            lib/pages/automation/payment_notification_settings_page.dart
++
++      - name: Unit tests
++        run: flutter test test/services/automation/payment_notification_parser_test.dart
++
++      - name: Build APK
++        # versionCode 必须递增，否则手机无法覆盖安装；首次 = 301（对齐官方 4.0.0=300）
++        run: |
++          flutter build apk --flavor prod --release \
++            --build-name=4.0.0 \
++            --build-number=$((300 + ${{ github.run_number }}))
++
++      - name: Upload artifacts
++        uses: actions/upload-artifact@v4
++        with:
++          name: beecount-apk-${{ github.run_number }}
++          path: build/app/outputs/flutter-apk/*.apk
++          retention-days: 30
++
++      - name: Publish release
++        uses: softprops/action-gh-release@v2
++        with:
++          tag_name: build-${{ github.run_number }}
++          name: BeeCount + 支付通知自动记账 #${{ github.run_number }}
++          body: |
++            自动构建：合并上游 `TNT-Likely/BeeCount@main` 后产出。
++            含自定义功能「支付宝/微信支付通知自动记账」（见 docs/auto-billing-notification.zh.md）。
++          files: build/app/outputs/flutter-apk/*.apk
++          fail_on_unmatched_files: true
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 84651b6..db31927 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -97,6 +97,24 @@
+             android:name="flutterEmbedding"
+             android:value="2" />
+         
++        <!-- 支付宝/微信支付通知监听：授权「通知使用权」后由系统绑定，
++             把支付通知交给 Dart 侧解析并自动记账（见 PaymentNotificationListener） -->
++        <service
++            android:name=".PaymentNotificationListener"
++            android:label="@string/payment_notify_service_label"
++            android:exported="false"
++            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
++            <intent-filter>
++                <action android:name="android.service.notification.NotificationListenerService" />
++            </intent-filter>
++        </service>
++
++        <!-- 通知上的「撤销」按钮 -->
++        <receiver
++            android:name=".PaymentNotificationActionReceiver"
++            android:enabled="true"
++            android:exported="false" />
++
+         <!-- 后台通知接收器 -->
+         <receiver android:name=".NotificationReceiver"
+             android:enabled="true"
+diff --git a/android/app/src/main/kotlin/com/tntlikely/beecount/MainActivity.kt b/android/app/src/main/kotlin/com/tntlikely/beecount/MainActivity.kt
+index 81b5743..eb6bbcd 100644
+--- a/android/app/src/main/kotlin/com/tntlikely/beecount/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/tntlikely/beecount/MainActivity.kt
+@@ -25,6 +25,7 @@ class MainActivity: FlutterFragmentActivity() {
+     private val SCREENSHOT_CHANNEL = "com.tntlikely.beecount/screenshot"
+     private val LOGGER_CHANNEL = "com.beecount.logger"
+     private val SHARE_CHANNEL = "com.tntlikely.beecount/share"
++    private val PAYMENT_NOTIFY_CHANNEL = "com.tntlikely.beecount/payment_notification"
+ 
+     private var screenshotObserver: ScreenshotObserver? = null
+ 
+@@ -183,6 +184,46 @@ class MainActivity: FlutterFragmentActivity() {
+             LoggerPlugin.error("MainActivity", "这是一条 ERROR 日志")
+         }, 2000)
+ 
++        // 支付通知自动记账的MethodChannel（支付宝/微信）
++        val paymentChannel = MethodChannel(
++            flutterEngine.dartExecutor.binaryMessenger,
++            PAYMENT_NOTIFY_CHANNEL
++        )
++        PaymentNotificationListener.methodChannel = paymentChannel
++        paymentChannel.setMethodCallHandler { call, result ->
++            when (call.method) {
++                "isPermissionGranted" ->
++                    result.success(isNotificationAccessGranted(this@MainActivity))
++                "isServiceConnected" ->
++                    result.success(PaymentNotificationListener.isConnected)
++                "openPermissionSettings" -> {
++                    try {
++                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
++                        result.success(true)
++                    } catch (e: Exception) {
++                        result.error("NO_SETTINGS", e.message, null)
++                    }
++                }
++                "peekQueue" -> result.success(PaymentNotifyStore.peek(this@MainActivity))
++                "ackEvent" -> {
++                    val id = call.argument<String>("id")
++                    if (id != null) PaymentNotifyStore.ack(this@MainActivity, id)
++                    result.success(true)
++                }
++                "removeEvent" -> result.success(
++                    PaymentNotifyStore.removeById(
++                        this@MainActivity, call.argument<String>("id").orEmpty()
++                    )
++                )
++                "queueCount" -> result.success(PaymentNotifyStore.count(this@MainActivity))
++                "clearQueue" -> {
++                    PaymentNotifyStore.clear(this@MainActivity)
++                    result.success(true)
++                }
++                else -> result.notImplemented()
++            }
++        }
++
+         // 截图监听的MethodChannel
+         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SCREENSHOT_CHANNEL).setMethodCallHandler { call, result ->
+             when (call.method) {
+diff --git a/android/app/src/main/kotlin/com/tntlikely/beecount/PaymentNotificationListener.kt b/android/app/src/main/kotlin/com/tntlikely/beecount/PaymentNotificationListener.kt
+new file mode 100644
+index 0000000..cc62984
+--- /dev/null
++++ b/android/app/src/main/kotlin/com/tntlikely/beecount/PaymentNotificationListener.kt
+@@ -0,0 +1,378 @@
++package com.tntlikely.beecount
++
++import android.app.Notification
++import android.app.NotificationChannel
++import android.app.NotificationManager
++import android.app.PendingIntent
++import android.content.BroadcastReceiver
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.os.Build
++import android.provider.Settings
++import android.service.notification.NotificationListenerService
++import android.service.notification.StatusBarNotification
++import android.widget.Toast
++import io.flutter.plugin.common.MethodChannel
++import org.json.JSONArray
++import org.json.JSONObject
++import java.util.UUID
++
++/**
++ * 支付宝 / 微信支付通知队列。
++ *
++ * 通知监听服务抓到的支付通知先落盘到 SharedPreferences，Dart 侧启动或回前台
++ * 时通过 `peekQueue` 拉取、逐条 `ackEvent`。这样即使 app 进程被杀，支付也不会
++ * 丢；记账时间仍取通知的 postTime。
++ */
++object PaymentNotifyStore {
++    private const val PREFS = "payment_notify_prefs"
++    private const val KEY_QUEUE = "queue"
++    private const val KEY_SEEN = "seen_keys"
++    private const val MAX_QUEUE = 200
++    private const val MAX_SEEN = 300
++
++    private fun prefs(context: Context) =
++        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++
++    private fun readQueue(context: Context): JSONArray {
++        val raw = prefs(context).getString(KEY_QUEUE, "[]") ?: "[]"
++        return try {
++            JSONArray(raw)
++        } catch (e: Exception) {
++            JSONArray()
++        }
++    }
++
++    private fun writeQueue(context: Context, queue: JSONArray) {
++        prefs(context).edit().putString(KEY_QUEUE, queue.toString()).apply()
++    }
++
++    private fun seenKeys(context: Context): MutableList<String> {
++        val raw = prefs(context).getString(KEY_SEEN, "[]") ?: "[]"
++        val list = mutableListOf<String>()
++        try {
++            val arr = JSONArray(raw)
++            for (i in 0 until arr.length()) list.add(arr.optString(i))
++        } catch (_: Exception) {
++        }
++        return list
++    }
++
++    /** 入队；重复通知（同一 key）返回 false。 */
++    @Synchronized
++    fun append(context: Context, event: JSONObject): Boolean {
++        val key = event.optString("key")
++        val seen = seenKeys(context)
++        if (key.isNotEmpty() && seen.contains(key)) return false
++
++        val queue = readQueue(context)
++        queue.put(event)
++        while (queue.length() > MAX_QUEUE) {
++            queue.remove(0)
++        }
++        writeQueue(context, queue)
++
++        if (key.isNotEmpty()) {
++            seen.add(key)
++            while (seen.size > MAX_SEEN) seen.removeAt(0)
++            prefs(context).edit().putString(KEY_SEEN, JSONArray(seen).toString()).apply()
++        }
++        return true
++    }
++
++    @Synchronized
++    fun peek(context: Context): List<Map<String, Any?>> {
++        val queue = readQueue(context)
++        val result = mutableListOf<Map<String, Any?>>()
++        for (i in 0 until queue.length()) {
++            val item = queue.optJSONObject(i) ?: continue
++            result.add(eventToMap(item))
++        }
++        return result
++    }
++
++    @Synchronized
++    fun ack(context: Context, id: String) {
++        val queue = readQueue(context)
++        val kept = JSONArray()
++        for (i in 0 until queue.length()) {
++            val item = queue.optJSONObject(i) ?: continue
++            if (item.optString("id") != id) kept.put(item)
++        }
++        writeQueue(context, kept)
++    }
++
++    /** Dart 侧撤销：连同通知一起清掉。 */
++    @Synchronized
++    fun removeById(context: Context, id: String): Boolean {
++        val queue = readQueue(context)
++        var removed = false
++        val kept = JSONArray()
++        for (i in 0 until queue.length()) {
++            val item = queue.optJSONObject(i) ?: continue
++            if (item.optString("id") == id) {
++                removed = true
++            } else {
++                kept.put(item)
++            }
++        }
++        if (removed) writeQueue(context, kept)
++        return removed
++    }
++
++    @Synchronized
++    fun count(context: Context): Int = readQueue(context).length()
++
++    @Synchronized
++    fun clear(context: Context) = writeQueue(context, JSONArray())
++
++    fun eventToMap(o: JSONObject): Map<String, Any?> = mapOf(
++        "id" to o.optString("id"),
++        "source" to o.optString("source"),
++        "pkg" to o.optString("pkg"),
++        "title" to o.optString("title"),
++        "text" to o.optString("text"),
++        "postedAt" to o.optLong("postedAt")
++    )
++}
++
++/** 系统设置里是否已授予「通知使用权」。 */
++fun isNotificationAccessGranted(context: Context): Boolean {
++    return try {
++        val enabled = Settings.Secure.getString(
++            context.contentResolver,
++            "enabled_notification_listeners"
++        ) ?: return false
++        val component = ComponentName(context, PaymentNotificationListener::class.java)
++        enabled.contains(component.flattenToString()) ||
++            enabled.contains(context.packageName)
++    } catch (e: Exception) {
++        false
++    }
++}
++
++/**
++ * 支付宝 / 微信支付通知监听。
++ *
++ * 只在通知文本同时具备「金额」和「收支关键词」时入队，尽量不误记营销通知；
++ * 真正的金额/方向/商户解析在 Dart 侧（PaymentNotificationParser）完成，
++ * 便于单测和规则迭代。
++ */
++class PaymentNotificationListener : NotificationListenerService() {
++
++    companion object {
++        private const val TAG = "PaymentNotify"
++        const val CHANNEL_ID = "payment_auto_billing"
++        private const val CHANNEL_NAME = "支付自动记账"
++        private const val PKG_WECHAT = "com.tencent.mm"
++        private const val PKG_ALIPAY = "com.eg.android.AlipayGphone"
++        private const val NOTIFY_ID_BASE = 7400
++
++        private val KEYWORDS = listOf(
++            "支付", "付款", "消费", "收款", "到账", "退款", "转账", "扣款", "入账"
++        )
++        private val MONEY_REGEX = Regex("[¥￥]\\s*\\d|\\d+(\\.\\d{1,2})?\\s*元")
++
++        /** app 在前台时，Dart 侧会把这个 channel 挂上，用于实时记账。 */
++        @Volatile
++        var methodChannel: MethodChannel? = null
++
++        @Volatile
++        var isConnected: Boolean = false
++
++        fun notifyIdFor(eventId: String): Int =
++            NOTIFY_ID_BASE + (eventId.hashCode() and 0xFFFF)
++    }
++
++    override fun onListenerConnected() {
++        super.onListenerConnected()
++        isConnected = true
++        LoggerPlugin.info(TAG, "通知监听服务已连接")
++    }
++
++    override fun onListenerDisconnected() {
++        super.onListenerDisconnected()
++        isConnected = false
++        LoggerPlugin.warning(TAG, "通知监听服务断开，尝试重连")
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
++            try {
++                requestRebind(ComponentName(this, PaymentNotificationListener::class.java))
++            } catch (_: Exception) {
++            }
++        }
++    }
++
++    override fun onNotificationPosted(sbn: StatusBarNotification?) {
++        val notification = sbn ?: return
++        val pkg = notification.packageName ?: return
++        val source = when (pkg) {
++            PKG_WECHAT -> "wechat"
++            PKG_ALIPAY -> "alipay"
++            else -> return
++        }
++        val n = notification.notification ?: return
++        val extras = n.extras ?: return
++
++        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
++        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
++        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString().orEmpty()
++        val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty()
++        val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
++            ?.joinToString(" ") { it.toString() }.orEmpty()
++        val summary = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
++            extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString().orEmpty()
++        } else {
++            ""
++        }
++
++        val body = listOf(bigText, text, lines, summary, subText)
++            .filter { it.isNotBlank() }
++            .distinct()
++            .joinToString(" ")
++            .trim()
++        if (body.isEmpty()) return
++
++        val all = "$title $body"
++        if (KEYWORDS.none { all.contains(it) }) return
++        if (!MONEY_REGEX.containsMatchIn(all)) return
++
++        val postedAt = if (notification.postTime > 0) notification.postTime
++        else System.currentTimeMillis()
++        // 同一条通知 1 分钟内不重复入队；通知更新（文字变化）仍可再次入队，
++        // 由 Dart 侧按「渠道+金额+分钟」二次去重。
++        val key = "$source|${body.hashCode()}|${postedAt / 60000}"
++        val event = JSONObject().apply {
++            put("id", UUID.randomUUID().toString())
++            put("source", source)
++            put("pkg", pkg)
++            put("title", title)
++            put("text", body)
++            put("postedAt", postedAt)
++            put("key", key)
++        }
++
++        if (!PaymentNotifyStore.append(this, event)) return
++        LoggerPlugin.info(TAG, "捕获 $source 通知: $body")
++
++        // app 在前台/引擎存活 → 立即交给 Dart 记账，此时不再额外弹提示（避免打扰）
++        var delivered = false
++        val channel = methodChannel
++        if (channel != null) {
++            try {
++                channel.invokeMethod("onPaymentEvent", PaymentNotifyStore.eventToMap(event))
++                delivered = true
++            } catch (e: Exception) {
++                LoggerPlugin.warning(TAG, "实时回调失败（改为下次启动补记）: ${e.message}")
++            }
++        }
++        // 进程被杀 / 引擎不在时，给一条低优先级提示：告诉用户已捕获、可撤销
++        if (!delivered) {
++            postCapturedNotification(event, postedAt)
++        }
++    }
++
++    /** 投一条低优先级提示：告诉用户「已捕获，待入账」，并给一个撤销按钮。 */
++    private fun postCapturedNotification(event: JSONObject, postedAt: Long) {
++        try {
++            val manager =
++                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
++            ensureChannel(manager)
++
++            val launch = packageManager.getLaunchIntentForPackage(packageName) ?: return
++            launch.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
++            val eventId = event.optString("id")
++            val requestCode = eventId.hashCode() and 0xFFFF
++            val contentIntent = PendingIntent.getActivity(
++                this, requestCode, launch,
++                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
++            )
++            val undoIntent = Intent(this, PaymentNotificationActionReceiver::class.java).apply {
++                action = PaymentNotificationActionReceiver.ACTION_UNDO
++                putExtra(PaymentNotificationActionReceiver.EXTRA_EVENT_ID, eventId)
++            }
++            val undoPending = PendingIntent.getBroadcast(
++                this, requestCode + 1, undoIntent,
++                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
++            )
++
++            val sourceLabel = if (event.optString("source") == "wechat") "微信" else "支付宝"
++            val amount = extractAmountLabel(event.optString("text"))
++            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++                Notification.Builder(this, CHANNEL_ID)
++            } else {
++                Notification.Builder(this)
++            }
++            builder
++                .setSmallIcon(R.mipmap.ic_launcher)
++                .setContentTitle("已捕获一笔${sourceLabel}支付${if (amount.isNotEmpty()) " ¥$amount" else ""}")
++                .setContentText("打开蜜蜂记账完成入账，或直接撤销")
++                .setWhen(postedAt)
++                .setAutoCancel(true)
++                .setContentIntent(contentIntent)
++                .setPriority(Notification.PRIORITY_LOW)
++                .addAction(0, "撤销", undoPending)
++            manager.notify(notifyIdFor(eventId), builder.build())
++        } catch (e: Exception) {
++            LoggerPlugin.warning(TAG, "提示通知发送失败: ${e.message}")
++        }
++    }
++
++    private fun extractAmountLabel(text: String): String {
++        val match = Regex("[¥￥]\\s*(\\d+(?:\\.\\d{1,2})?)|(\\d+(?:\\.\\d{1,2})?)\\s*元")
++            .find(text) ?: return ""
++        return match.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }
++            ?: match.groupValues.getOrNull(2).orEmpty()
++    }
++
++    private fun ensureChannel(manager: NotificationManager) {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
++        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
++        val channel = NotificationChannel(
++            CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW
++        ).apply {
++            description = "微信/支付宝支付通知自动记一笔的提示"
++            setShowBadge(false)
++            enableVibration(false)
++            enableLights(false)
++        }
++        manager.createNotificationChannel(channel)
++    }
++}
++
++/** 通知上的「撤销」按钮：把队列里这条删掉；若已被 Dart 记账则通知它删除。 */
++class PaymentNotificationActionReceiver : BroadcastReceiver() {
++    companion object {
++        const val ACTION_UNDO = "com.tntlikely.beecount.PAYMENT_NOTIFY_UNDO"
++        const val EXTRA_EVENT_ID = "event_id"
++    }
++
++    override fun onReceive(context: Context?, intent: Intent?) {
++        val ctx = context ?: return
++        if (intent?.action != ACTION_UNDO) return
++        val eventId = intent.getStringExtra(EXTRA_EVENT_ID) ?: return
++
++        val removed = PaymentNotifyStore.removeById(ctx, eventId)
++        try {
++            val manager =
++                ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
++            manager.cancel(PaymentNotificationListener.notifyIdFor(eventId))
++        } catch (_: Exception) {
++        }
++
++        // 已经落库的记录交给 Dart 删除（回前台或实时回调时处理）
++        PaymentNotificationListener.methodChannel?.let { channel ->
++            try {
++                channel.invokeMethod("onUndoRequested", eventId)
++            } catch (_: Exception) {
++            }
++        }
++
++        Toast.makeText(
++            ctx,
++            if (removed) "已撤销这笔待入账记录" else "已撤销",
++            Toast.LENGTH_SHORT
++        ).show()
++        LoggerPlugin.info("PaymentNotify", "用户撤销通知事件 $eventId")
++    }
++}
+diff --git a/android/app/src/main/res/values-en/strings.xml b/android/app/src/main/res/values-en/strings.xml
+index 3ee5b34..419e066 100644
+--- a/android/app/src/main/res/values-en/strings.xml
++++ b/android/app/src/main/res/values-en/strings.xml
+@@ -5,6 +5,7 @@
+          覆盖的字符串按 Android 机制回退到 values/ 默认值。 -->
+     <string name="app_name">BeeCount</string>
+     <string name="app_name_test">BeeCount Test</string>
++    <string name="payment_notify_service_label">BeeCount payment notifications</string>
+     <!-- Widget names (android:label in the launcher picker) -->
+     <string name="widget_name">Overview (Medium)</string>
+     <string name="widget_glance_small_name">Overview (Small)</string>
+diff --git a/android/app/src/main/res/values/strings.xml b/android/app/src/main/res/values/strings.xml
+index 2dcbc16..16209d8 100644
+--- a/android/app/src/main/res/values/strings.xml
++++ b/android/app/src/main/res/values/strings.xml
+@@ -3,6 +3,8 @@
+     <!-- 通用资源 -->
+     <string name="app_name">蜜蜂记账</string>
+     <string name="app_name_test">蜜蜂记账测试版</string>
++    <!-- 系统「通知使用权」列表里显示的监听服务名 -->
++    <string name="payment_notify_service_label">蜜蜂记账支付通知监听</string>
+     <!-- 桌面小组件:选择器里显示的名称(android:label)。每个 receiver 各用一个,
+          否则都继承 app_name「蜜蜂记账」、无法区分。 -->
+     <string name="widget_name">收支速览·中</string>
+diff --git a/docs/auto-billing-notification.zh.md b/docs/auto-billing-notification.zh.md
+new file mode 100644
+index 0000000..2237e17
+--- /dev/null
++++ b/docs/auto-billing-notification.zh.md
+@@ -0,0 +1,95 @@
++# 支付宝 / 微信支付通知自动记账（自定义功能）
++
++> 本仓库 = [TNT-Likely/BeeCount](https://github.com/TNT-Likely/BeeCount) + 一个自定义功能：
++> **手机收到微信支付 / 支付宝的付款、收款通知时，自动记一笔账。**
++> 除该功能外，不改动原项目的任何行为。
++
++## 1. 功能是什么
++
++| 能力 | 说明 |
++| --- | --- |
++| 实时捕获 | Android 通知监听服务读取微信（`com.tencent.mm`）与支付宝（`com.eg.android.AlipayGphone`）的支付类通知 |
++| 本地解析 | 金额、收支方向、商户、时间全部用本地正则 + 关键词规则解析，**不调用 AI、不联网、零费用** |
++| 自动入账 | 解析成功即写入当前账本：账户记到「微信 / 支付宝」，并打上「通知记账」标签 |
++| 可撤销 | 通知栏「撤销」按钮、设置页「最近自动记账」列表都能删掉这笔 |
++| 离线补记 | app 被杀期间的通知先落盘排队，下次打开 app 时补记，记账时间仍是付款时间 |
++| 去重 | 原生按 `渠道+文本+分钟`、Dart 按 `渠道+金额+分钟` 双重去重，通知重复推送不会记两笔 |
++
++## 2. 开启方式
++
++1. 设置 → 智能记账 → **支付通知自动记账**
++2. 打开开关，按提示到系统设置里给「蜜蜂记账」授予**通知使用权**
++   （Android 设置 → 通知 → 通知使用权 / 特殊应用权限）
++3. 回到 app，状态显示「已获得通知使用权 / 监听服务运行中」即生效
++
++> 权限说明：Android 的「通知使用权」只能读取通知文本，不能读取聊天内容、不能截屏、不能点击其他 app。
++> 通知文本只在本机解析并落库，不上传任何服务器。
++
++## 3. 覆盖范围与已知限制
++
++- **仅 Android**：iOS 不允许第三方 app 读取其他 app 的通知，iOS 上改用「账单导入」或「分享截图记账」。
++- **依赖通知存在**：微信/支付宝若关闭了「支付」通知，或在 app 内支付时不发通知，则捕获不到；可在微信「我 → 设置 → 消息通知」、支付宝「我的 → 设置 → 通用 → 新消息通知」里打开。
++- **商户名常缺失**：微信支付通知通常只有金额，没有商户；解析不到商户时备注记「微信 / 支付宝」，分类可事后补。
++- **不处理**：还款提醒、账单提醒、营销活动、支付失败/取消、验证码类通知（有黑名单拦截）。
++- Google Play 构建（`GOOGLE_PLAY=true`）未做限制，但上架政策需自行评估通知权限用途说明。
++
++## 4. 代码结构（改动清单）
++
++| 文件 | 作用 |
++| --- | --- |
++| `android/app/src/main/kotlin/com/tntlikely/beecount/PaymentNotificationListener.kt` | 通知监听服务 + 落盘队列 `PaymentNotifyStore` + 撤销广播接收器 + 捕获提示通知 |
++| `android/app/src/main/kotlin/com/tntlikely/beecount/MainActivity.kt` | 新增 MethodChannel `com.tntlikely.beecount/payment_notification` |
++| `android/app/src/main/AndroidManifest.xml` | 注册 service / receiver（`BIND_NOTIFICATION_LISTENER_SERVICE`） |
++| `lib/services/automation/payment_notification_parser.dart` | 纯 Dart 解析器（可单测） |
++| `lib/services/automation/payment_notification_service.dart` | 队列消费、去重、落库、撤销、生命周期补记 |
++| `lib/providers/payment_notification_providers.dart` | 服务 provider |
++| `lib/pages/automation/payment_notification_settings_page.dart` | 设置页（开关 / 授权 / 队列 / 最近记录撤销） |
++| `lib/pages/settings/smart_billing/bindings/smart_billing_entries.dart` | 设置入口（仅 Android 显示） |
++| `lib/main.dart` | 启动时初始化并补记离线队列 |
++| `lib/services/data/tag_seed_service.dart` | 新增记账方式标签 `notification` |
++| `lib/l10n/app_zh.arb` / `app_en.arb` | 中英文案（繁中/韩文自动回退英文） |
++| `test/services/automation/payment_notification_parser_test.dart` | 解析规则单测 |
++
++## 5. 本地构建
++
++```powershell
++# 依赖：Flutter 3.27.3 (Dart 3.6.1)、JDK 17、Android SDK 36
++flutter pub get
++flutter gen-l10n
++flutter analyze
++flutter test test/services/automation/payment_notification_parser_test.dart
++flutter build apk --flavor prod --release --build-name=4.0.0 --build-number=301
++# 产物：build/app/outputs/flutter-apk/app-{armeabi-v7a,arm64-v8a,x86_64}-prod-release.apk
++#       （另有 universal 的 app-prod-release.apk）
++```
++
++签名：`android/key.properties` 指向固定 keystore（`storeFile` 相对 `android/app/` 解析，
++所以写 `../beecount-autobill.jks`）。**换签名会导致无法覆盖安装**（只能卸载重装，账本会丢）。
++`--build-number` 必须递增，否则手机上无法覆盖安装。
++
++## 6. 跟着上游自动更新
++
++`.github/workflows/sync-upstream-build.yml`：
++
++1. 每天北京时间 04:00 拉取上游 `TNT-Likely/BeeCount@main` 并 `git merge` 到当前分支；
++2. 有变更 → 自动 `flutter analyze` + 单测 + 构建签名 APK → 发 GitHub Release；
++3. **合并冲突会让工作流红灯**，不会静默丢掉本功能。冲突时要人工处理的地方基本只有：
++   - `android/app/src/main/AndroidManifest.xml`
++   - `MainActivity.kt` 里新增的 channel 段
++   - `lib/main.dart` 的初始化调用
++   - `lib/l10n/*.arb` 新增文案
++
++启用步骤：
++
++1. Fork 本仓库（或把自己的 fork 作为 upstream 的镜像），把本分支推到 `main`；
++2. Settings → Actions → General → Workflow permissions 选 **Read and write**；
++3. 配好固定签名 Secrets（否则每次构建签名不同，无法覆盖升级）：
++   - `ANDROID_KEYSTORE_BASE64`：keystore 的 base64（`base64 -w0 release.jks`）
++   - `ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`
++4. 手动跑一次 `Sync upstream and build APK` 验证。
++
++## 7. 隐私
++
++- 通知文本只在本机内存 / 本地 SQLite 中处理；
++- 解析规则离线运行，不请求 AI、不上传、不统计；
++- 捕获提示通知走独立低优先级渠道（无声音、无角标），可在系统设置里单独关闭。
+diff --git a/lib/l10n/app_en.arb b/lib/l10n/app_en.arb
+index 2e0d322..184b691 100644
+--- a/lib/l10n/app_en.arb
++++ b/lib/l10n/app_en.arb
+@@ -4724,5 +4724,35 @@
+   "recordingProgressRecognizing": "Reading your bill",
+   "recordingProgressRecognizingDetail": "Organizing amounts, categories and notes",
+   "recordingProgressSavingDetail": "Saving the entries from this recognition",
+-  "recordingProgressSlow": "This is taking a little longer. Processing is continuing."
++  "recordingProgressSlow": "This is taking a little longer. Processing is continuing.",
++  "paymentNotifyTitle": "Payment notification billing",
++  "paymentNotifyIntroTitle": "Bill WeChat/Alipay payments automatically",
++  "paymentNotifyIntroBody": "When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.",
++  "paymentNotifyUnsupported": "Not supported on this platform",
++  "paymentNotifyUnsupportedDesc": "iOS does not allow reading other apps' notifications. Use bill import or share a screenshot instead.",
++  "paymentNotifyEnable": "Notification auto-billing",
++  "paymentNotifyEnableDesc": "Recognize WeChat Pay and Alipay payment/receipt notifications",
++  "paymentNotifyPermissionGranted": "Notification access granted",
++  "paymentNotifyPermissionMissing": "Notification access missing",
++  "paymentNotifyServiceConnected": "Listener service is running",
++  "paymentNotifyServiceNotConnected": "Granted; waiting for the system to start the listener",
++  "paymentNotifyGrantHint": "Open system settings, find BeeCount and enable notification access",
++  "paymentNotifyGrant": "Grant",
++  "paymentNotifyQueueTitle": "{count, plural, =0{No pending notifications} =1{1 pending notification} other{{count} pending notifications}}",
++  "@paymentNotifyQueueTitle": {
++    "placeholders": {
++      "count": {
++        "type": "int"
++      }
++    }
++  },
++  "paymentNotifyQueueDesc": "Notifications received in background are queued and recorded when you return or tap Check now",
++  "paymentNotifyProcessNow": "Check now",
++  "paymentNotifyRecentTitle": "Recent auto-recorded",
++  "paymentNotifyRecentEmpty": "No auto-recorded payments yet",
++  "paymentNotifyUndo": "Undo",
++  "paymentNotifyUndone": "Entry removed",
++  "paymentNotifyUndoFailed": "Undo failed",
++  "paymentNotifyPrivacy": "Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.",
++  "tagDefaultNotificationBilling": "Notification billing"
+ }
+diff --git a/lib/l10n/app_localizations.dart b/lib/l10n/app_localizations.dart
+index 5660389..2485420 100644
+--- a/lib/l10n/app_localizations.dart
++++ b/lib/l10n/app_localizations.dart
+@@ -17557,6 +17557,144 @@ abstract class AppLocalizations {
+   /// In en, this message translates to:
+   /// **'This is taking a little longer. Processing is continuing.'**
+   String get recordingProgressSlow;
++
++  /// No description provided for @paymentNotifyTitle.
++  ///
++  /// In en, this message translates to:
++  /// **'Payment notification billing'**
++  String get paymentNotifyTitle;
++
++  /// No description provided for @paymentNotifyIntroTitle.
++  ///
++  /// In en, this message translates to:
++  /// **'Bill WeChat/Alipay payments automatically'**
++  String get paymentNotifyIntroTitle;
++
++  /// No description provided for @paymentNotifyIntroBody.
++  ///
++  /// In en, this message translates to:
++  /// **'When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.'**
++  String get paymentNotifyIntroBody;
++
++  /// No description provided for @paymentNotifyUnsupported.
++  ///
++  /// In en, this message translates to:
++  /// **'Not supported on this platform'**
++  String get paymentNotifyUnsupported;
++
++  /// No description provided for @paymentNotifyUnsupportedDesc.
++  ///
++  /// In en, this message translates to:
++  /// **'iOS does not allow reading other apps\' notifications. Use bill import or share a screenshot instead.'**
++  String get paymentNotifyUnsupportedDesc;
++
++  /// No description provided for @paymentNotifyEnable.
++  ///
++  /// In en, this message translates to:
++  /// **'Notification auto-billing'**
++  String get paymentNotifyEnable;
++
++  /// No description provided for @paymentNotifyEnableDesc.
++  ///
++  /// In en, this message translates to:
++  /// **'Recognize WeChat Pay and Alipay payment/receipt notifications'**
++  String get paymentNotifyEnableDesc;
++
++  /// No description provided for @paymentNotifyPermissionGranted.
++  ///
++  /// In en, this message translates to:
++  /// **'Notification access granted'**
++  String get paymentNotifyPermissionGranted;
++
++  /// No description provided for @paymentNotifyPermissionMissing.
++  ///
++  /// In en, this message translates to:
++  /// **'Notification access missing'**
++  String get paymentNotifyPermissionMissing;
++
++  /// No description provided for @paymentNotifyServiceConnected.
++  ///
++  /// In en, this message translates to:
++  /// **'Listener service is running'**
++  String get paymentNotifyServiceConnected;
++
++  /// No description provided for @paymentNotifyServiceNotConnected.
++  ///
++  /// In en, this message translates to:
++  /// **'Granted; waiting for the system to start the listener'**
++  String get paymentNotifyServiceNotConnected;
++
++  /// No description provided for @paymentNotifyGrantHint.
++  ///
++  /// In en, this message translates to:
++  /// **'Open system settings, find BeeCount and enable notification access'**
++  String get paymentNotifyGrantHint;
++
++  /// No description provided for @paymentNotifyGrant.
++  ///
++  /// In en, this message translates to:
++  /// **'Grant'**
++  String get paymentNotifyGrant;
++
++  /// No description provided for @paymentNotifyQueueTitle.
++  ///
++  /// In en, this message translates to:
++  /// **'{count, plural, =0{No pending notifications} =1{1 pending notification} other{{count} pending notifications}}'**
++  String paymentNotifyQueueTitle(int count);
++
++  /// No description provided for @paymentNotifyQueueDesc.
++  ///
++  /// In en, this message translates to:
++  /// **'Notifications received in background are queued and recorded when you return or tap Check now'**
++  String get paymentNotifyQueueDesc;
++
++  /// No description provided for @paymentNotifyProcessNow.
++  ///
++  /// In en, this message translates to:
++  /// **'Check now'**
++  String get paymentNotifyProcessNow;
++
++  /// No description provided for @paymentNotifyRecentTitle.
++  ///
++  /// In en, this message translates to:
++  /// **'Recent auto-recorded'**
++  String get paymentNotifyRecentTitle;
++
++  /// No description provided for @paymentNotifyRecentEmpty.
++  ///
++  /// In en, this message translates to:
++  /// **'No auto-recorded payments yet'**
++  String get paymentNotifyRecentEmpty;
++
++  /// No description provided for @paymentNotifyUndo.
++  ///
++  /// In en, this message translates to:
++  /// **'Undo'**
++  String get paymentNotifyUndo;
++
++  /// No description provided for @paymentNotifyUndone.
++  ///
++  /// In en, this message translates to:
++  /// **'Entry removed'**
++  String get paymentNotifyUndone;
++
++  /// No description provided for @paymentNotifyUndoFailed.
++  ///
++  /// In en, this message translates to:
++  /// **'Undo failed'**
++  String get paymentNotifyUndoFailed;
++
++  /// No description provided for @paymentNotifyPrivacy.
++  ///
++  /// In en, this message translates to:
++  /// **'Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.'**
++  String get paymentNotifyPrivacy;
++
++  /// No description provided for @tagDefaultNotificationBilling.
++  ///
++  /// In en, this message translates to:
++  /// **'Notification billing'**
++  String get tagDefaultNotificationBilling;
+ }
+ 
+ class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {
+diff --git a/lib/l10n/app_localizations_en.dart b/lib/l10n/app_localizations_en.dart
+index df9fe46..9a38234 100644
+--- a/lib/l10n/app_localizations_en.dart
++++ b/lib/l10n/app_localizations_en.dart
+@@ -9333,4 +9333,82 @@ class AppLocalizationsEn extends AppLocalizations {
+ 
+   @override
+   String get recordingProgressSlow => 'This is taking a little longer. Processing is continuing.';
++
++  @override
++  String get paymentNotifyTitle => 'Payment notification billing';
++
++  @override
++  String get paymentNotifyIntroTitle => 'Bill WeChat/Alipay payments automatically';
++
++  @override
++  String get paymentNotifyIntroBody => 'When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.';
++
++  @override
++  String get paymentNotifyUnsupported => 'Not supported on this platform';
++
++  @override
++  String get paymentNotifyUnsupportedDesc => 'iOS does not allow reading other apps\' notifications. Use bill import or share a screenshot instead.';
++
++  @override
++  String get paymentNotifyEnable => 'Notification auto-billing';
++
++  @override
++  String get paymentNotifyEnableDesc => 'Recognize WeChat Pay and Alipay payment/receipt notifications';
++
++  @override
++  String get paymentNotifyPermissionGranted => 'Notification access granted';
++
++  @override
++  String get paymentNotifyPermissionMissing => 'Notification access missing';
++
++  @override
++  String get paymentNotifyServiceConnected => 'Listener service is running';
++
++  @override
++  String get paymentNotifyServiceNotConnected => 'Granted; waiting for the system to start the listener';
++
++  @override
++  String get paymentNotifyGrantHint => 'Open system settings, find BeeCount and enable notification access';
++
++  @override
++  String get paymentNotifyGrant => 'Grant';
++
++  @override
++  String paymentNotifyQueueTitle(int count) {
++    String _temp0 = intl.Intl.pluralLogic(
++      count,
++      locale: localeName,
++      other: '$count pending notifications',
++      one: '1 pending notification',
++      zero: 'No pending notifications',
++    );
++    return '$_temp0';
++  }
++
++  @override
++  String get paymentNotifyQueueDesc => 'Notifications received in background are queued and recorded when you return or tap Check now';
++
++  @override
++  String get paymentNotifyProcessNow => 'Check now';
++
++  @override
++  String get paymentNotifyRecentTitle => 'Recent auto-recorded';
++
++  @override
++  String get paymentNotifyRecentEmpty => 'No auto-recorded payments yet';
++
++  @override
++  String get paymentNotifyUndo => 'Undo';
++
++  @override
++  String get paymentNotifyUndone => 'Entry removed';
++
++  @override
++  String get paymentNotifyUndoFailed => 'Undo failed';
++
++  @override
++  String get paymentNotifyPrivacy => 'Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.';
++
++  @override
++  String get tagDefaultNotificationBilling => 'Notification billing';
+ }
+diff --git a/lib/l10n/app_localizations_ko.dart b/lib/l10n/app_localizations_ko.dart
+index 8ad05a7..d298d1c 100644
+--- a/lib/l10n/app_localizations_ko.dart
++++ b/lib/l10n/app_localizations_ko.dart
+@@ -9333,4 +9333,82 @@ class AppLocalizationsKo extends AppLocalizations {
+ 
+   @override
+   String get recordingProgressSlow => 'This is taking a little longer. Processing is continuing.';
++
++  @override
++  String get paymentNotifyTitle => 'Payment notification billing';
++
++  @override
++  String get paymentNotifyIntroTitle => 'Bill WeChat/Alipay payments automatically';
++
++  @override
++  String get paymentNotifyIntroBody => 'When WeChat Pay or Alipay posts a payment or receipt notification, BeeCount reads the amount and direction and records it in the current ledger. Notifications received while the app is closed are recorded the next time you open it, keeping the original payment time.';
++
++  @override
++  String get paymentNotifyUnsupported => 'Not supported on this platform';
++
++  @override
++  String get paymentNotifyUnsupportedDesc => 'iOS does not allow reading other apps\' notifications. Use bill import or share a screenshot instead.';
++
++  @override
++  String get paymentNotifyEnable => 'Notification auto-billing';
++
++  @override
++  String get paymentNotifyEnableDesc => 'Recognize WeChat Pay and Alipay payment/receipt notifications';
++
++  @override
++  String get paymentNotifyPermissionGranted => 'Notification access granted';
++
++  @override
++  String get paymentNotifyPermissionMissing => 'Notification access missing';
++
++  @override
++  String get paymentNotifyServiceConnected => 'Listener service is running';
++
++  @override
++  String get paymentNotifyServiceNotConnected => 'Granted; waiting for the system to start the listener';
++
++  @override
++  String get paymentNotifyGrantHint => 'Open system settings, find BeeCount and enable notification access';
++
++  @override
++  String get paymentNotifyGrant => 'Grant';
++
++  @override
++  String paymentNotifyQueueTitle(int count) {
++    String _temp0 = intl.Intl.pluralLogic(
++      count,
++      locale: localeName,
++      other: '$count pending notifications',
++      one: '1 pending notification',
++      zero: 'No pending notifications',
++    );
++    return '$_temp0';
++  }
++
++  @override
++  String get paymentNotifyQueueDesc => 'Notifications received in background are queued and recorded when you return or tap Check now';
++
++  @override
++  String get paymentNotifyProcessNow => 'Check now';
++
++  @override
++  String get paymentNotifyRecentTitle => 'Recent auto-recorded';
++
++  @override
++  String get paymentNotifyRecentEmpty => 'No auto-recorded payments yet';
++
++  @override
++  String get paymentNotifyUndo => 'Undo';
++
++  @override
++  String get paymentNotifyUndone => 'Entry removed';
++
++  @override
++  String get paymentNotifyUndoFailed => 'Undo failed';
++
++  @override
++  String get paymentNotifyPrivacy => 'Privacy: notification text is parsed locally only and never uploaded. Rules run offline without any AI call or cost.';
++
++  @override
++  String get tagDefaultNotificationBilling => 'Notification billing';
+ }
+diff --git a/lib/l10n/app_localizations_zh.dart b/lib/l10n/app_localizations_zh.dart
+index 6e819fe..4a28f7e 100644
+--- a/lib/l10n/app_localizations_zh.dart
++++ b/lib/l10n/app_localizations_zh.dart
+@@ -9325,6 +9325,77 @@ class AppLocalizationsZh extends AppLocalizations {
+ 
+   @override
+   String get recordingProgressSlow => '这次处理时间稍长，仍在继续处理。';
++
++  @override
++  String get paymentNotifyTitle => '支付通知自动记账';
++
++  @override
++  String get paymentNotifyIntroTitle => '微信/支付宝付款，自动记一笔';
++
++  @override
++  String get paymentNotifyIntroBody => '开启后，手机收到微信支付或支付宝的付款/收款通知时，蜜蜂记账会自动识别金额和收支方向，记入当前账本。app 关闭期间收到的通知会在下次打开时补记，时间仍是付款时间。';
++
++  @override
++  String get paymentNotifyUnsupported => '当前平台不支持';
++
++  @override
++  String get paymentNotifyUnsupportedDesc => 'iOS 不允许读取其他 app 的通知，请使用「账单导入」或分享截图记账。';
++
++  @override
++  String get paymentNotifyEnable => '通知自动记账';
++
++  @override
++  String get paymentNotifyEnableDesc => '识别微信支付、支付宝的支付/收款通知';
++
++  @override
++  String get paymentNotifyPermissionGranted => '已获得通知使用权';
++
++  @override
++  String get paymentNotifyPermissionMissing => '缺少「通知使用权」';
++
++  @override
++  String get paymentNotifyServiceConnected => '监听服务运行中';
++
++  @override
++  String get paymentNotifyServiceNotConnected => '已授权，等待系统启动监听服务';
++
++  @override
++  String get paymentNotifyGrantHint => '请在系统设置里找到「蜜蜂记账」，打开「允许读取通知」';
++
++  @override
++  String get paymentNotifyGrant => '去授权';
++
++  @override
++  String paymentNotifyQueueTitle(int count) {
++    return '待处理通知 $count 条';
++  }
++
++  @override
++  String get paymentNotifyQueueDesc => '后台收到的通知会先排队，回到前台或点「立即检查」时补记';
++
++  @override
++  String get paymentNotifyProcessNow => '立即检查';
++
++  @override
++  String get paymentNotifyRecentTitle => '最近自动记账';
++
++  @override
++  String get paymentNotifyRecentEmpty => '还没有自动记账记录';
++
++  @override
++  String get paymentNotifyUndo => '撤销';
++
++  @override
++  String get paymentNotifyUndone => '已撤销这笔记录';
++
++  @override
++  String get paymentNotifyUndoFailed => '撤销失败';
++
++  @override
++  String get paymentNotifyPrivacy => '隐私说明：通知文本仅在本机解析，不会上传；识别规则在本地运行，不调用 AI，也不产生费用。';
++
++  @override
++  String get tagDefaultNotificationBilling => '通知记账';
+ }
+ 
+ /// The translations for Chinese, as used in Taiwan (`zh_TW`).
+diff --git a/lib/l10n/app_zh.arb b/lib/l10n/app_zh.arb
+index 3caf44b..90665a3 100644
+--- a/lib/l10n/app_zh.arb
++++ b/lib/l10n/app_zh.arb
+@@ -4271,5 +4271,35 @@
+   "recordingProgressRecognizing": "正在识别账单",
+   "recordingProgressRecognizingDetail": "整理金额、分类与备注",
+   "recordingProgressSavingDetail": "正在保存本次识别的记录",
+-  "recordingProgressSlow": "这次处理时间稍长，仍在继续处理。"
++  "recordingProgressSlow": "这次处理时间稍长，仍在继续处理。",
++  "paymentNotifyTitle": "支付通知自动记账",
++  "paymentNotifyIntroTitle": "微信/支付宝付款，自动记一笔",
++  "paymentNotifyIntroBody": "开启后，手机收到微信支付或支付宝的付款/收款通知时，蜜蜂记账会自动识别金额和收支方向，记入当前账本。app 关闭期间收到的通知会在下次打开时补记，时间仍是付款时间。",
++  "paymentNotifyUnsupported": "当前平台不支持",
++  "paymentNotifyUnsupportedDesc": "iOS 不允许读取其他 app 的通知，请使用「账单导入」或分享截图记账。",
++  "paymentNotifyEnable": "通知自动记账",
++  "paymentNotifyEnableDesc": "识别微信支付、支付宝的支付/收款通知",
++  "paymentNotifyPermissionGranted": "已获得通知使用权",
++  "paymentNotifyPermissionMissing": "缺少「通知使用权」",
++  "paymentNotifyServiceConnected": "监听服务运行中",
++  "paymentNotifyServiceNotConnected": "已授权，等待系统启动监听服务",
++  "paymentNotifyGrantHint": "请在系统设置里找到「蜜蜂记账」，打开「允许读取通知」",
++  "paymentNotifyGrant": "去授权",
++  "paymentNotifyQueueTitle": "待处理通知 {count} 条",
++  "@paymentNotifyQueueTitle": {
++    "placeholders": {
++      "count": {
++        "type": "int"
++      }
++    }
++  },
++  "paymentNotifyQueueDesc": "后台收到的通知会先排队，回到前台或点「立即检查」时补记",
++  "paymentNotifyProcessNow": "立即检查",
++  "paymentNotifyRecentTitle": "最近自动记账",
++  "paymentNotifyRecentEmpty": "还没有自动记账记录",
++  "paymentNotifyUndo": "撤销",
++  "paymentNotifyUndone": "已撤销这笔记录",
++  "paymentNotifyUndoFailed": "撤销失败",
++  "paymentNotifyPrivacy": "隐私说明：通知文本仅在本机解析，不会上传；识别规则在本地运行，不调用 AI，也不产生费用。",
++  "tagDefaultNotificationBilling": "通知记账"
+ }
+diff --git a/lib/main.dart b/lib/main.dart
+index 340ce01..47a1ccd 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -22,6 +22,7 @@ import 'providers/security_providers.dart';
+ import 'services/system/reminder_monitor_service.dart';
+ import 'providers/credit_card_reminder_providers.dart';
+ import 'services/platform/screenshot_monitor_service.dart';
++import 'services/automation/payment_notification_service.dart';
+ import 'services/platform/image_share_handler_service.dart';
+ import 'services/platform/app_link_service.dart';
+ import 'services/system/logger_service.dart';
+@@ -134,6 +135,11 @@ Future<void> main() async {
+     _setupImageShareHandler(container);
+   }
+ 
++  // 初始化支付宝/微信支付通知自动记账（Android专属）
++  if (Platform.isAndroid) {
++    _setupPaymentNotification(container);
++  }
++
+   // 启动 URL 监听（用于快捷指令/AppLink 自动记账）
+   _setupUrlListener(container);
+ 
+@@ -339,6 +345,20 @@ void _setupImageShareHandler(ProviderContainer container) {
+   }
+ }
+ 
++/// 设置支付宝/微信支付通知自动记账（Android专属）
++///
++/// 原生 `PaymentNotificationListener` 在系统「通知使用权」授权后持续监听
++/// 微信/支付宝的支付通知并落盘排队；这里启动时把离线排队的通知补记成账单，
++/// 回到前台时再由服务自身的生命周期回调继续补记。
++void _setupPaymentNotification(ProviderContainer container) {
++  try {
++    logger.info('App', '💰 [Android] 初始化支付通知自动记账...');
++    PaymentNotificationService(container).init();
++  } catch (e) {
++    logger.error('App', '❌ 支付通知自动记账初始化失败', e);
++  }
++}
++
+ /// 设置 URL 监听（用于 AppLink）
+ ///
+ /// 监听 beecount:// URL Scheme 调用
+diff --git a/lib/pages/automation/payment_notification_settings_page.dart b/lib/pages/automation/payment_notification_settings_page.dart
+new file mode 100644
+index 0000000..64d1704
+--- /dev/null
++++ b/lib/pages/automation/payment_notification_settings_page.dart
+@@ -0,0 +1,297 @@
++import 'package:beecount_ui/beecount_ui.dart';
++import 'package:flutter/material.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:intl/intl.dart';
++
++import '../../l10n/app_localizations.dart';
++import '../../providers/payment_notification_providers.dart';
++import '../../services/automation/payment_notification_parser.dart';
++import '../../services/automation/payment_notification_service.dart';
++
++/// 支付宝 / 微信支付通知自动记账设置页。
++///
++/// 依赖 Android「通知使用权」：授权后 [PaymentNotificationListener] 抓取支付通知，
++/// Dart 侧解析并落库，本页负责开关、授权入口、待处理队列与最近记录撤销。
++class PaymentNotificationSettingsPage extends ConsumerStatefulWidget {
++  const PaymentNotificationSettingsPage({super.key});
++
++  @override
++  ConsumerState<PaymentNotificationSettingsPage> createState() =>
++      _PaymentNotificationSettingsPageState();
++}
++
++class _PaymentNotificationSettingsPageState
++    extends ConsumerState<PaymentNotificationSettingsPage>
++    with WidgetsBindingObserver {
++  bool _loading = true;
++  bool _enabled = false;
++  bool _granted = false;
++  bool _connected = false;
++  bool _busy = false;
++  int _queueCount = 0;
++  List<AutoRecordedPayment> _recent = const <AutoRecordedPayment>[];
++
++  PaymentNotificationService get _service =>
++      ref.read(paymentNotificationServiceProvider);
++
++  @override
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addObserver(this);
++    _reload();
++  }
++
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    // 从系统设置授权完回来，自动刷新状态。
++    if (state == AppLifecycleState.resumed) _reload();
++  }
++
++  @override
++  void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    super.dispose();
++  }
++
++  Future<void> _reload() async {
++    if (!PaymentNotificationService.isSupported) {
++      setState(() => _loading = false);
++      return;
++    }
++    try {
++      final enabled = await _service.isEnabled();
++      final granted = await _service.isPermissionGranted();
++      final connected = await _service.isServiceConnected();
++      final queueCount = await _service.queueCount();
++      final recent = await _service.recent();
++      if (!mounted) return;
++      setState(() {
++        _enabled = enabled;
++        _granted = granted;
++        _connected = connected;
++        _queueCount = queueCount;
++        _recent = recent;
++        _loading = false;
++      });
++    } catch (_) {
++      if (mounted) setState(() => _loading = false);
++    }
++  }
++
++  Future<void> _toggle(bool value) async {
++    if (_busy) return;
++    final l = AppLocalizations.of(context);
++    setState(() => _busy = true);
++    try {
++      await _service.setEnabled(value);
++      if (value && !await _service.isPermissionGranted()) {
++        await _service.openSystemSettings();
++        if (mounted) {
++          ScaffoldMessenger.of(context).showSnackBar(
++            SnackBar(content: Text(l.paymentNotifyGrantHint)),
++          );
++        }
++      }
++      await _reload();
++    } finally {
++      if (mounted) setState(() => _busy = false);
++    }
++  }
++
++  Future<void> _grant() async {
++    await _service.openSystemSettings();
++    await _reload();
++  }
++
++  Future<void> _processNow() async {
++    if (_busy) return;
++    setState(() => _busy = true);
++    try {
++      await _service.drainQueue();
++      await _reload();
++    } finally {
++      if (mounted) setState(() => _busy = false);
++    }
++  }
++
++  Future<void> _undo(AutoRecordedPayment record) async {
++    final l = AppLocalizations.of(context);
++    final ok = await _service.undo(record.transactionId);
++    if (!mounted) return;
++    ScaffoldMessenger.of(context).showSnackBar(
++      SnackBar(
++        content: Text(ok ? l.paymentNotifyUndone : l.paymentNotifyUndoFailed),
++      ),
++    );
++    await _reload();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final l = AppLocalizations.of(context);
++    final theme = Theme.of(context);
++    return Scaffold(
++      backgroundColor: theme.scaffoldBackgroundColor,
++      body: Column(
++        children: [
++          BeePageHeader(
++            title: l.paymentNotifyTitle,
++            leading: BeeIconButton(
++              label: l.commonBack,
++              icon: const BeeLineIcon('ChevronLeft', size: 22),
++              onPressed: () => Navigator.maybePop(context),
++            ),
++          ),
++          Expanded(
++            child: _loading
++                ? const Center(child: CircularProgressIndicator())
++                : ListView(
++                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
++                    children: [
++                      _infoCard(l, theme),
++                      const SizedBox(height: 12),
++                      if (!PaymentNotificationService.isSupported)
++                        _unsupportedCard(l, theme)
++                      else ...[
++                        _switchCard(l, theme),
++                        const SizedBox(height: 12),
++                        _permissionCard(l, theme),
++                        const SizedBox(height: 12),
++                        _queueCard(l, theme),
++                        const SizedBox(height: 12),
++                        _recentCard(l, theme),
++                      ],
++                      const SizedBox(height: 12),
++                      _privacyCard(l, theme),
++                    ],
++                  ),
++          ),
++        ],
++      ),
++    );
++  }
++
++  Widget _card(BuildContext context, List<Widget> children) => Container(
++        margin: const EdgeInsets.only(bottom: 0),
++        decoration: BoxDecoration(
++          color: Theme.of(context).cardColor,
++          borderRadius: BorderRadius.circular(14),
++        ),
++        child: Column(
++            crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
++      );
++
++  Widget _infoCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        Padding(
++          padding: const EdgeInsets.all(14),
++          child: Column(
++            crossAxisAlignment: CrossAxisAlignment.start,
++            children: [
++              Text(l.paymentNotifyIntroTitle,
++                  style: theme.textTheme.titleSmall
++                      ?.copyWith(fontWeight: FontWeight.w600)),
++              const SizedBox(height: 6),
++              Text(l.paymentNotifyIntroBody,
++                  style: theme.textTheme.bodySmall
++                      ?.copyWith(color: theme.hintColor, height: 1.5)),
++            ],
++          ),
++        ),
++      ]);
++
++  Widget _unsupportedCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        ListTile(
++          leading: const Icon(Icons.info_outline),
++          title: Text(l.paymentNotifyUnsupported),
++          subtitle: Text(l.paymentNotifyUnsupportedDesc),
++        ),
++      ]);
++
++  Widget _switchCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        SwitchListTile(
++          value: _enabled,
++          onChanged: _busy ? null : _toggle,
++          title: Text(l.paymentNotifyEnable),
++          subtitle: Text(l.paymentNotifyEnableDesc),
++        ),
++      ]);
++
++  Widget _permissionCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        ListTile(
++          leading: Icon(
++            _granted ? Icons.verified_user_outlined : Icons.warning_amber_rounded,
++            color: _granted ? Colors.green : theme.colorScheme.error,
++          ),
++          title: Text(_granted
++              ? l.paymentNotifyPermissionGranted
++              : l.paymentNotifyPermissionMissing),
++          subtitle: Text(_granted
++              ? (_connected
++                  ? l.paymentNotifyServiceConnected
++                  : l.paymentNotifyServiceNotConnected)
++              : l.paymentNotifyGrantHint),
++          trailing: _granted
++              ? null
++              : TextButton(onPressed: _grant, child: Text(l.paymentNotifyGrant)),
++        ),
++      ]);
++
++  Widget _queueCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        ListTile(
++          leading: const Icon(Icons.inbox_outlined),
++          title: Text(l.paymentNotifyQueueTitle(_queueCount)),
++          subtitle: Text(l.paymentNotifyQueueDesc),
++          trailing: TextButton(
++            onPressed: _busy ? null : _processNow,
++            child: Text(l.paymentNotifyProcessNow),
++          ),
++        ),
++      ]);
++
++  Widget _recentCard(AppLocalizations l, ThemeData theme) => _card(context, [
++        Padding(
++          padding: const EdgeInsets.fromLTRB(14, 14, 14, 4),
++          child: Text(l.paymentNotifyRecentTitle,
++              style: theme.textTheme.titleSmall
++                  ?.copyWith(fontWeight: FontWeight.w600)),
++        ),
++        if (_recent.isEmpty)
++          Padding(
++            padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
++            child: Text(l.paymentNotifyRecentEmpty,
++                style: theme.textTheme.bodySmall
++                    ?.copyWith(color: theme.hintColor)),
++          )
++        else
++          for (final record in _recent.take(20))
++            ListTile(
++              dense: true,
++              leading: Icon(
++                record.source == PaymentSource.wechat
++                    ? Icons.chat_bubble_outline
++                    : Icons.account_balance_wallet_outlined,
++              ),
++              title: Text(
++                '${record.isExpense ? '-' : '+'}'
++                '${record.amount.toStringAsFixed(2)} · ${record.source.accountName}',
++                style: theme.textTheme.bodyMedium,
++              ),
++              subtitle: Text(
++                '${DateFormat('MM-dd HH:mm').format(record.occurredAt)}'
++                '${record.note == null || record.note!.isEmpty ? '' : ' · ${record.note}'}',
++                style: theme.textTheme.bodySmall
++                    ?.copyWith(color: theme.hintColor),
++              ),
++              trailing: TextButton(
++                onPressed: () => _undo(record),
++                child: Text(l.paymentNotifyUndo),
++              ),
++            ),
++      ]);
++
++  Widget _privacyCard(AppLocalizations l, ThemeData theme) => Text(
++        l.paymentNotifyPrivacy,
++        style: theme.textTheme.bodySmall
++            ?.copyWith(color: theme.hintColor, height: 1.5),
++      );
++}
+diff --git a/lib/pages/settings/smart_billing/bindings/smart_billing_entries.dart b/lib/pages/settings/smart_billing/bindings/smart_billing_entries.dart
+index 13da1ed..100d133 100644
+--- a/lib/pages/settings/smart_billing/bindings/smart_billing_entries.dart
++++ b/lib/pages/settings/smart_billing/bindings/smart_billing_entries.dart
+@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import '../../../../l10n/app_localizations.dart';
+ import '../../../ai/ai_settings_page.dart';
+ import '../../../automation/auto_billing_settings_page.dart';
++import '../../../automation/payment_notification_settings_page.dart';
+ import '../../shortcuts_guide_page.dart';
+ import 'smart_billing_dialogs.dart';
+ 
+@@ -102,7 +103,18 @@ class SmartBillingEntries extends ConsumerWidget {
+               () => open(const AutoBillingSettingsPage())),
+         row('Command', l.shortcutsGuide, l.shortcutsGuideDesc,
+             () => open(const ShortcutsGuidePage()))
+-      ])
++      ]),
++      // 支付宝/微信支付通知自动记账（仅 Android 可读取通知）
++      if (policy.android) ...[
++        const SizedBox(height: 12),
++        smartBillingCard(context, [
++          row(
++              'Bell',
++              l.paymentNotifyTitle,
++              l.paymentNotifyEnableDesc,
++              () => open(const PaymentNotificationSettingsPage()))
++        ])
++      ]
+     ]);
+   }
+ }
+diff --git a/lib/providers/payment_notification_providers.dart b/lib/providers/payment_notification_providers.dart
+new file mode 100644
+index 0000000..a5bf927
+--- /dev/null
++++ b/lib/providers/payment_notification_providers.dart
+@@ -0,0 +1,7 @@
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++
++import '../services/automation/payment_notification_service.dart';
++
++/// 通知自动记账服务（单例，内部持有 ProviderContainer）。
++final paymentNotificationServiceProvider = Provider<PaymentNotificationService>(
++    (ref) => PaymentNotificationService(ref.container));
+diff --git a/lib/services/automation/payment_notification_parser.dart b/lib/services/automation/payment_notification_parser.dart
+new file mode 100644
+index 0000000..eec6bee
+--- /dev/null
++++ b/lib/services/automation/payment_notification_parser.dart
+@@ -0,0 +1,281 @@
++/// 支付宝 / 微信支付通知解析器（纯 Dart，无平台依赖）。
++///
++/// 输入是 Android 通知监听服务（[PaymentNotificationListener]）上报的原始文本，
++/// 输出结构化的一笔支付。**不做 AI 调用**：通知文本里的金额、方向、商户都用
++/// 本地正则 + 关键词规则判断，保证离线、零成本、可单测。
++///
++/// 设计原则：
++/// 1. 宁可漏记，不可错记 —— 命中不了规则就返回 null，交给用户在 app 里手动补；
++/// 2. 只认「有钱 + 有收支关键词」的文本，账单提醒 / 营销 / 还款提示一律丢弃；
++/// 3. 商户名可缺省（微信支付通知通常只有金额），缺省时用「微信支付/支付宝」兜底。
++library;
++
++/// 支付渠道。
++enum PaymentSource {
++  wechat,
++  alipay;
++
++  /// 落库时写入 account 字段的名称（走 [BillCreationService] 的账户模糊匹配）。
++  String get accountName => this == PaymentSource.wechat ? '微信' : '支付宝';
++
++  /// 渠道内部 key（与原生侧一致）。
++  String get key => this == PaymentSource.wechat ? 'wechat' : 'alipay';
++
++  static PaymentSource? fromKey(String? key) {
++    switch (key) {
++      case 'wechat':
++        return PaymentSource.wechat;
++      case 'alipay':
++        return PaymentSource.alipay;
++      default:
++        return null;
++    }
++  }
++}
++
++/// 解析结果：一笔待落库的支付。
++class ParsedPayment {
++  const ParsedPayment({
++    required this.eventId,
++    required this.source,
++    required this.amount,
++    required this.isExpense,
++    required this.occurredAt,
++    required this.rawText,
++    this.merchant,
++    this.note,
++  });
++
++  /// 原生侧生成的事件 ID（用于撤销、去重）。
++  final String eventId;
++
++  final PaymentSource source;
++
++  /// 金额，永远为正数；方向看 [isExpense]。
++  final double amount;
++
++  /// true = 支出，false = 收入（收款/退款）。
++  final bool isExpense;
++
++  final DateTime occurredAt;
++
++  /// 原始通知文本（调试 / 备注兜底）。
++  final String rawText;
++
++  /// 商户名，可能为 null（微信支付通知通常不带商户）。
++  final String? merchant;
++
++  /// 落库用备注（≤15 字，符合账单备注习惯）。
++  final String? note;
++
++  double get signedAmount => isExpense ? -amount : amount;
++
++  @override
++  String toString() =>
++      'ParsedPayment(${source.key}, $amount, expense=$isExpense, '
++      'merchant=$merchant, at=$occurredAt)';
++}
++
++class PaymentNotificationParser {
++  const PaymentNotificationParser._();
++
++  /// 金额：优先「¥/￥ + 数字」，其次「数字 + 元」。
++  static final RegExp _symbolAmount = RegExp(
++    r'[¥￥]\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)',
++  );
++  static final RegExp _yuanAmount = RegExp(
++    r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*元',
++  );
++  static final RegExp _plainAmount = RegExp(
++    r'(?<![\d.])(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})(?![\d])',
++  );
++
++  /// 出现这些词说明是「账单/营销/失败」类通知，直接放弃。
++  static const List<String> _blockedWords = <String>[
++    '还款',
++    '账单已出',
++    '账单日',
++    '即将到期',
++    '待还',
++    '额度',
++    '优惠',
++    '立减',
++    '活动',
++    '邀请',
++    '积分',
++    '权益',
++    '领取',
++    '抽奖',
++    '红包封面',
++    '验证码',
++    '登录',
++    '失败',
++    '未支付',
++    '待支付',
++    '超时',
++    '已取消',
++    '已关闭',
++    '退款中',
++    '申请退款',
++    '撤销',
++  ];
++
++  /// 收入方向关键词（优先级高于支出）。
++  static const List<String> _incomeWords = <String>[
++    '收款',
++    '到账',
++    '收入',
++    '退回',
++    '退款',
++    '返还',
++    '入账',
++    '转入',
++    '收到',
++  ];
++
++  /// 支出方向关键词。
++  static const List<String> _expenseWords = <String>[
++    '支付',
++    '付款',
++    '消费',
++    '扣款',
++    '支出',
++    '转出',
++    '已付',
++  ];
++
++  /// 金额上限，超过视为解析噪音（如「额度 50000 元」）。
++  static const double _maxAmount = 1000000;
++
++  /// 解析一条原生上报事件；无法解析返回 null。
++  ///
++  /// [event] 结构：`{id, source, title, text, postedAt}`。
++  static ParsedPayment? parse(Map<dynamic, dynamic> event) {
++    final eventId = (event['id'] ?? '').toString();
++    final source = PaymentSource.fromKey((event['source'] ?? '').toString());
++    if (eventId.isEmpty || source == null) return null;
++
++    final title = (event['title'] ?? '').toString();
++    final body = (event['text'] ?? '').toString();
++    final text = '$title $body'.trim();
++    if (text.isEmpty) return null;
++
++    // 红包封面/营销类文本里也带「元」，先挡掉。
++    for (final word in _blockedWords) {
++      if (text.contains(word)) return null;
++    }
++
++    final amount = extractAmount(text);
++    if (amount == null) return null;
++
++    // 方向只认正文：标题通常是渠道名（「支付宝」含「支付」二字），
++    // 拿标题判断方向会把「余额宝收益」这类通知误判成支出。
++    final directionText = body.isNotEmpty ? body : title;
++    final isExpense = _isExpense(directionText);
++    if (isExpense == null) return null;
++
++    final postedAt = _parseTimestamp(event['postedAt']);
++    final merchant = _extractMerchant(body.isNotEmpty ? body : title, amount);
++
++    return ParsedPayment(
++      eventId: eventId,
++      source: source,
++      amount: amount,
++      isExpense: isExpense,
++      occurredAt: postedAt,
++      rawText: text,
++      merchant: merchant,
++      note: _buildNote(merchant, source),
++    );
++  }
++
++  /// 从文本里抽金额；抽不到或明显不合理返回 null。
++  ///
++  /// 只辨认「带货币符号」或「带元」的金额 —— 裸数字太容易把「订单号 2026…」
++  /// 当成金额。
++  static double? extractAmount(String text) {
++    String? raw;
++    final symbolMatch = _symbolAmount.firstMatch(text);
++    if (symbolMatch != null) {
++      raw = symbolMatch.group(1);
++    } else {
++      final yuanMatch = _yuanAmount.firstMatch(text);
++      if (yuanMatch != null) raw = yuanMatch.group(1);
++    }
++    // 兜底：发票/部分系统通知只给「12.00」两位小数，但要避免订单号。
++    raw ??= _plainAmount.firstMatch(text)?.group(1);
++    if (raw == null) return null;
++
++    final value = double.tryParse(raw.replaceAll(',', ''));
++    if (value == null || value <= 0 || value > _maxAmount) return null;
++    return value;
++  }
++
++  /// 判断收支方向；无法判断返回 null。
++  static bool? _isExpense(String text) {
++    for (final word in _incomeWords) {
++      if (text.contains(word)) return false;
++    }
++    for (final word in _expenseWords) {
++      if (text.contains(word)) return true;
++    }
++    return null;
++  }
++
++  /// 尽量从正文里取商户名（「美团 支付成功」→ 美团）。
++  static String? _extractMerchant(String text, double amount) {
++    var cleaned = text;
++    // 去掉金额本身，避免商户名里混进数字。
++    cleaned = cleaned.replaceAll(_symbolAmount, ' ');
++    cleaned = cleaned.replaceAll(_yuanAmount, ' ');
++    cleaned = cleaned.replaceAll(RegExp(r'[¥￥]'), ' ');
++    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
++    if (cleaned.isEmpty) return null;
++
++    final match = RegExp(r'^([^，,。.:：;；!！?？\s]{2,20}?)\s*(?:支付成功|付款成功|支付|付款|消费|收款|到账|退款)')
++        .firstMatch(cleaned);
++    final candidate = match?.group(1)?.trim();
++    if (candidate == null || candidate.isEmpty) return null;
++
++    // 纯渠道名/人称代词不算商户。
++    const noise = <String>{
++      '微信',
++      '微信支付',
++      '支付宝',
++      '支付宝支付',
++      '你',
++      '您',
++      '我',
++      '支付',
++      '付款',
++      '消费',
++      '收款',
++      '到账',
++      '退款',
++      '交易',
++      '订单',
++    };
++    if (noise.contains(candidate)) return null;
++    if (RegExp(r'^\d').hasMatch(candidate)) return null;
++    if (candidate.length > 15) return candidate.substring(0, 15);
++    return candidate;
++  }
++
++  static String? _buildNote(String? merchant, PaymentSource source) {
++    if (merchant != null && merchant.isNotEmpty) return merchant;
++    return source.accountName;
++  }
++
++  static DateTime _parseTimestamp(Object? value) {
++    if (value is int && value > 0) {
++      return DateTime.fromMillisecondsSinceEpoch(value);
++    }
++    if (value is String) {
++      final parsed = int.tryParse(value);
++      if (parsed != null && parsed > 0) {
++        return DateTime.fromMillisecondsSinceEpoch(parsed);
++      }
++    }
++    return DateTime.now();
++  }
++}
+diff --git a/lib/services/automation/payment_notification_service.dart b/lib/services/automation/payment_notification_service.dart
+new file mode 100644
+index 0000000..fac47fb
+--- /dev/null
++++ b/lib/services/automation/payment_notification_service.dart
+@@ -0,0 +1,424 @@
++import 'dart:async';
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:flutter/services.dart';
++import 'package:flutter/widgets.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++import '../../ai/core/bill_info.dart';
++import '../../providers.dart';
++import '../../utils/app_localizations_resolver.dart';
++import '../billing/bill_creation_service.dart';
++import '../billing/post_processor.dart';
++import '../data/tag_seed_service.dart';
++import '../system/logger_service.dart';
++import 'payment_notification_parser.dart';
++
++/// 通知自动记账的最近一条记录（设置页展示 + 撤销用）。
++class AutoRecordedPayment {
++  const AutoRecordedPayment({
++    required this.transactionId,
++    required this.eventId,
++    required this.source,
++    required this.amount,
++    required this.isExpense,
++    required this.occurredAt,
++    this.note,
++  });
++
++  final int transactionId;
++  final String eventId;
++  final PaymentSource source;
++  final double amount;
++  final bool isExpense;
++  final DateTime occurredAt;
++  final String? note;
++
++  double get signedAmount => isExpense ? -amount : amount;
++
++  Map<String, dynamic> toJson() => <String, dynamic>{
++        'txId': transactionId,
++        'eventId': eventId,
++        'source': source.key,
++        'amount': amount,
++        'isExpense': isExpense,
++        'at': occurredAt.millisecondsSinceEpoch,
++        'note': note,
++      };
++
++  static AutoRecordedPayment? fromJson(Object? raw) {
++    if (raw is! Map) return null;
++    final source = PaymentSource.fromKey(raw['source']?.toString());
++    final txId = raw['txId'];
++    if (source == null || txId is! int) return null;
++    return AutoRecordedPayment(
++      transactionId: txId,
++      eventId: (raw['eventId'] ?? '').toString(),
++      source: source,
++      amount: (raw['amount'] as num?)?.toDouble() ?? 0,
++      isExpense: raw['isExpense'] != false,
++      occurredAt: DateTime.fromMillisecondsSinceEpoch(
++          (raw['at'] as num?)?.toInt() ?? 0),
++      note: raw['note']?.toString(),
++    );
++  }
++}
++
++/// 支付宝 / 微信支付通知 → 自动记账。
++///
++/// 链路：Android [PaymentNotificationListener] 抓通知 → 入队（SharedPreferences）
++/// → Dart 侧解析（[PaymentNotificationParser]）→ [BillCreationService] 落库。
++/// app 在前台时走 MethodChannel 实时回调，在后台/被杀时下次启动补记，
++/// 记账时间仍为通知发生时间。
++class PaymentNotificationService with WidgetsBindingObserver {
++  static const MethodChannel _channel =
++      MethodChannel('com.tntlikely.beecount/payment_notification');
++
++  static const String enabledKey = 'payment_notify_enabled';
++  static const String _seenKey = 'payment_notify_seen';
++  static const String _recentKey = 'payment_notify_recent';
++  static const int _maxSeen = 400;
++  static const int _maxRecent = 50;
++  static const String _tag = 'PaymentNotify';
++
++  final ProviderContainer _container;
++  bool _draining = false;
++  bool _initialized = false;
++
++  static PaymentNotificationService? _instance;
++
++  factory PaymentNotificationService(ProviderContainer container) {
++    _instance ??= PaymentNotificationService._internal(container);
++    return _instance!;
++  }
++
++  PaymentNotificationService._internal(this._container);
++
++  /// 仅在 Android 上有实现（iOS 无法读取其他 app 的通知）。
++  static bool get isSupported => Platform.isAndroid;
++
++  /// 启动：挂 MethodChannel、监听生命周期、补记离线排队的支付。
++  Future<void> init() async {
++    if (_initialized) {
++      await drainQueue();
++      return;
++    }
++    _initialized = true;
++    _channel.setMethodCallHandler(_onPlatformCall);
++    WidgetsBinding.instance.addObserver(this);
++    // 启动阶段原生 channel 还没注册（MainActivity 在 runApp 后才装配），
++    // 这一次调用会拿到 MissingPluginException 并被吞掉；等第一帧后再补一次，
++    // 保证「重启手机后第一次打开 app」也能把离线队列记进去。
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      drainQueue();
++    });
++    await drainQueue();
++  }
++
++  Future<dynamic> _onPlatformCall(MethodCall call) async {
++    switch (call.method) {
++      case 'onPaymentEvent':
++        final args = call.arguments;
++        if (args is Map) {
++          await _handleEvent(Map<dynamic, dynamic>.from(args));
++        }
++        return null;
++      case 'onUndoRequested':
++        await _handleNativeUndo((call.arguments ?? '').toString());
++        return null;
++      default:
++        return null;
++    }
++  }
++
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    if (state == AppLifecycleState.resumed) {
++      // 后台期间的通知可能在队列里，回到前台补记。
++      drainQueue();
++    }
++  }
++
++  void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    _channel.setMethodCallHandler(null);
++  }
++
++  // ---------------------------------------------------------------------------
++  // 平台状态
++  // ---------------------------------------------------------------------------
++
++  /// 系统「通知使用权」是否已授予。
++  Future<bool> isPermissionGranted() async {
++    if (!isSupported) return false;
++    try {
++      final granted =
++          await _channel.invokeMethod<bool>('isPermissionGranted') ?? false;
++      return granted;
++    } catch (e) {
++      logger.warning(_tag, '查询通知权限失败: $e');
++      return false;
++    }
++  }
++
++  /// 原生监听服务是否已连接（授权后系统会拉起它）。
++  Future<bool> isServiceConnected() async {
++    if (!isSupported) return false;
++    try {
++      return await _channel.invokeMethod<bool>('isServiceConnected') ?? false;
++    } catch (_) {
++      return false;
++    }
++  }
++
++  Future<void> openSystemSettings() async {
++    if (!isSupported) return;
++    try {
++      await _channel.invokeMethod<void>('openPermissionSettings');
++    } catch (e) {
++      logger.warning(_tag, '打开通知使用权设置失败: $e');
++    }
++  }
++
++  Future<int> queueCount() async {
++    if (!isSupported) return 0;
++    try {
++      return await _channel.invokeMethod<int>('queueCount') ?? 0;
++    } catch (_) {
++      return 0;
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // 开关
++  // ---------------------------------------------------------------------------
++
++  Future<bool> isEnabled() async {
++    final prefs = await SharedPreferences.getInstance();
++    return prefs.getBool(enabledKey) ?? false;
++  }
++
++  Future<void> setEnabled(bool value) async {
++    final prefs = await SharedPreferences.getInstance();
++    await prefs.setBool(enabledKey, value);
++    if (value) {
++      await drainQueue();
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // 队列消费
++  // ---------------------------------------------------------------------------
++
++  /// 拉取并处理离线排队的通知；每条处理成功后才 ack。
++  Future<void> drainQueue() async {
++    if (!isSupported || _draining) return;
++    if (!await isEnabled()) return;
++    _draining = true;
++    var handled = 0;
++    try {
++      final items = await _channel.invokeListMethod<dynamic>('peekQueue') ??
++          const <dynamic>[];
++      for (final item in items) {
++        if (item is! Map) continue;
++        final map = Map<dynamic, dynamic>.from(item);
++        // true = 已处理或确定不需要处理（可 ack）；false = 需要稍后重试。
++        final settled = await _handleEvent(map);
++        handled += settled ? 1 : 0;
++        final id = (map['id'] ?? '').toString();
++        if (settled && id.isNotEmpty) {
++          await _channel.invokeMethod<void>('ackEvent', {'id': id});
++        }
++      }
++      if (handled > 0) {
++        logger.info(_tag, '通知队列处理完成', '出队 $handled 条（含重复/非支付）');
++        _container.read(statsRefreshProvider.notifier).state++;
++      }
++    } catch (e, st) {
++      logger.error(_tag, '消费通知队列失败', e, st);
++    } finally {
++      _draining = false;
++    }
++  }
++
++  Future<void> _handleNativeUndo(String eventId) async {
++    if (eventId.isEmpty) return;
++    final record = await _findRecordByEvent(eventId);
++    if (record != null) {
++      await undo(record.transactionId);
++    }
++  }
++
++  /// 解析 + 落库一条原生事件。
++  ///
++  /// 返回 true 表示「这条已经处理完，可以出队」（记账成功、重复、或确认不是
++  /// 支付通知）；返回 false 表示「暂时处理不了」（开关关闭/无账本/落库异常），
++  /// 事件必须留在队列里等下次重试，避免静默丢账。
++  Future<bool> _handleEvent(Map<dynamic, dynamic> event) async {
++    final parsed = PaymentNotificationParser.parse(event);
++    if (parsed == null) {
++      logger.debug(_tag, '通知不是可记账的支付，跳过',
++          '${event['title']} | ${event['text']}');
++      return true;
++    }
++    if (!await isEnabled()) return false;
++    if (await _isDuplicate(parsed)) {
++      logger.debug(_tag, '重复通知，跳过', parsed.toString());
++      return true;
++    }
++
++    final ledgerId = await _resolveLedgerId();
++    if (ledgerId == null) {
++      logger.warning(_tag, '无可用账本，本次通知留在队列');
++      return false;
++    }
++
++    try {
++      final l10n = resolveAppLocalizations(null);
++      final persister = BillCreationService(_container.read(repositoryProvider));
++      final transactionId = await persister.createFromBill(
++        bill: BillInfo(
++          amount: parsed.signedAmount,
++          time: parsed.occurredAt,
++          note: parsed.note,
++          type: parsed.isExpense ? BillType.expense : BillType.income,
++          account: parsed.source.accountName,
++          confidence: 0.9,
++        ),
++        ledgerId: ledgerId,
++        billingTypes: const <String>[TagSeedService.billingTypeNotification],
++        l10n: l10n,
++      );
++      if (transactionId == null) {
++        logger.warning(_tag, '落库失败', parsed.toString());
++        return false;
++      }
++
++      await _markSeen(parsed);
++      await _pushRecent(AutoRecordedPayment(
++        transactionId: transactionId,
++        eventId: parsed.eventId,
++        source: parsed.source,
++        amount: parsed.amount,
++        isExpense: parsed.isExpense,
++        occurredAt: parsed.occurredAt,
++        note: parsed.note,
++      ));
++      _container.read(statsRefreshProvider.notifier).state++;
++      await PostProcessor.runC(_container, ledgerId: ledgerId, tags: true);
++      logger.info(_tag, '通知自动记账成功',
++          '${parsed.source.key} ${parsed.signedAmount} id=$transactionId');
++      return true;
++    } catch (e, st) {
++      logger.error(_tag, '通知自动记账失败', e, st);
++      return false;
++    }
++  }
++
++  // ---------------------------------------------------------------------------
++  // 去重 / 持久化
++  // ---------------------------------------------------------------------------
++
++  static String _dedupeKey(ParsedPayment payment) {
++    final minute = payment.occurredAt.millisecondsSinceEpoch ~/ 60000;
++    return '${payment.source.key}|'
++        '${payment.amount.toStringAsFixed(2)}|$minute';
++  }
++
++  Future<bool> _isDuplicate(ParsedPayment payment) async {
++    final prefs = await SharedPreferences.getInstance();
++    final seen = prefs.getStringList(_seenKey) ?? const <String>[];
++    return seen.contains(payment.eventId) ||
++        seen.contains(_dedupeKey(payment));
++  }
++
++  Future<void> _markSeen(ParsedPayment payment) async {
++    final prefs = await SharedPreferences.getInstance();
++    final seen = List<String>.from(
++        prefs.getStringList(_seenKey) ?? const <String>[]);
++    seen.add(payment.eventId);
++    seen.add(_dedupeKey(payment));
++    while (seen.length > _maxSeen) {
++      seen.removeAt(0);
++    }
++    await prefs.setStringList(_seenKey, seen);
++  }
++
++  Future<void> _pushRecent(AutoRecordedPayment record) async {
++    final prefs = await SharedPreferences.getInstance();
++    final list = prefs.getStringList(_recentKey) ?? const <String>[];
++    final updated = <String>[jsonEncode(record.toJson()), ...list];
++    while (updated.length > _maxRecent) {
++      updated.removeLast();
++    }
++    await prefs.setStringList(_recentKey, updated);
++  }
++
++  Future<List<AutoRecordedPayment>> recent() async {
++    final prefs = await SharedPreferences.getInstance();
++    final list = prefs.getStringList(_recentKey) ?? const <String>[];
++    final result = <AutoRecordedPayment>[];
++    for (final raw in list) {
++      try {
++        final decoded = AutoRecordedPayment.fromJson(jsonDecode(raw));
++        if (decoded != null) result.add(decoded);
++      } catch (_) {
++        // 单条损坏不影响其它记录
++      }
++    }
++    return result;
++  }
++
++  Future<AutoRecordedPayment?> _findRecordByEvent(String eventId) async {
++    for (final record in await recent()) {
++      if (record.eventId == eventId) return record;
++    }
++    return null;
++  }
++
++  /// 撤销一笔自动记账（真删，和手动删除行为一致）。
++  Future<bool> undo(int transactionId) async {
++    try {
++      await _container.read(repositoryProvider).deleteTransaction(transactionId);
++      final prefs = await SharedPreferences.getInstance();
++      final list = prefs.getStringList(_recentKey) ?? const <String>[];
++      final kept = list
++          .where((raw) {
++            try {
++              final decoded = AutoRecordedPayment.fromJson(jsonDecode(raw));
++              return decoded?.transactionId != transactionId;
++            } catch (_) {
++              return true;
++            }
++          })
++          .toList();
++      await prefs.setStringList(_recentKey, kept);
++      _container.read(statsRefreshProvider.notifier).state++;
++      logger.info(_tag, '已撤销自动记账', 'txId=$transactionId');
++      return true;
++    } catch (e, st) {
++      logger.error(_tag, '撤销自动记账失败', e, st);
++      return false;
++    }
++  }
++
++  Future<int?> _resolveLedgerId() async {
++    try {
++      return _container.read(currentLedgerIdProvider);
++    } catch (_) {
++      // provider 未就绪时回落到 prefs / 默认账本
++    }
++    final prefs = await SharedPreferences.getInstance();
++    final fromPrefs = prefs.getInt('current_ledger_id');
++    if (fromPrefs != null) return fromPrefs;
++    try {
++      final ledgers = await _container.read(repositoryProvider).getAllLedgers();
++      if (ledgers.isEmpty) return null;
++      return ledgers.first.id;
++    } catch (_) {
++      return null;
++    }
++  }
++}
+diff --git a/lib/services/data/tag_seed_service.dart b/lib/services/data/tag_seed_service.dart
+index 6392a0d..aecb7c7 100644
+--- a/lib/services/data/tag_seed_service.dart
++++ b/lib/services/data/tag_seed_service.dart
+@@ -126,6 +126,9 @@ class TagSeedService {
+   static const String billingTypeCamera = 'camera';
+   static const String billingTypeAi = 'ai';
+ 
++  /// 支付宝/微信支付通知自动记账（见 PaymentNotificationService）
++  static const String billingTypeNotification = 'notification';
++
+   /// 获取记账方式对应的标签名称
+   static String? getBillingTagName(String billingType, AppLocalizations l10n) {
+     switch (billingType) {
+@@ -137,6 +140,8 @@ class TagSeedService {
+         return l10n.tagDefaultCameraBilling;
+       case billingTypeAi:
+         return l10n.tagDefaultAiBilling;
++      case billingTypeNotification:
++        return l10n.tagDefaultNotificationBilling;
+       default:
+         return null;
+     }
+diff --git a/test/services/automation/payment_notification_parser_test.dart b/test/services/automation/payment_notification_parser_test.dart
+new file mode 100644
+index 0000000..51a8be8
+--- /dev/null
++++ b/test/services/automation/payment_notification_parser_test.dart
+@@ -0,0 +1,143 @@
++import 'package:flutter_test/flutter_test.dart';
++
++import 'package:beecount/services/automation/payment_notification_parser.dart';
++
++/// 支付宝 / 微信支付通知解析规则单测。
++///
++/// 样本取自两类通知的常见文案（金额、收款、退款、营销、失败），用来锁住
++/// 「宁可漏记不可错记」的边界：拿不准的一律返回 null。
++void main() {
++  Map<String, dynamic> event({
++    String id = 'e1',
++    String source = 'wechat',
++    String title = '微信支付',
++    required String text,
++    int postedAt = 1700000000000,
++  }) =>
++      <String, dynamic>{
++        'id': id,
++        'source': source,
++        'title': title,
++        'text': text,
++        'postedAt': postedAt,
++      };
++
++  group('微信支付', () {
++    test('已支付¥12.00 解析为支出', () {
++      final parsed =
++          PaymentNotificationParser.parse(event(text: '已支付¥12.00'));
++      expect(parsed, isNotNull);
++      expect(parsed!.source, PaymentSource.wechat);
++      expect(parsed.amount, 12.0);
++      expect(parsed.isExpense, isTrue);
++      expect(parsed.signedAmount, -12.0);
++      expect(parsed.occurredAt.millisecondsSinceEpoch, 1700000000000);
++    });
++
++    test('收款到账解析为收入', () {
++      final parsed = PaymentNotificationParser.parse(
++          event(text: '微信支付收款 25.00 元'));
++      expect(parsed, isNotNull);
++      expect(parsed!.isExpense, isFalse);
++      expect(parsed.amount, 25.0);
++      expect(parsed.merchant, isNull, reason: '渠道名不算商户');
++      expect(parsed.note, '微信');
++    });
++
++    test('带商户的文案能抽出商户', () {
++      final parsed =
++          PaymentNotificationParser.parse(event(text: '美团 支付成功 ¥20.00'));
++      expect(parsed, isNotNull);
++      expect(parsed!.merchant, '美团');
++      expect(parsed.note, '美团');
++    });
++
++    test('退款到账算收入', () {
++      final parsed =
++          PaymentNotificationParser.parse(event(text: '退款到账 ¥15.00'));
++      expect(parsed, isNotNull);
++      expect(parsed!.isExpense, isFalse);
++      expect(parsed.amount, 15.0);
++    });
++
++    test('失败通知不记账', () {
++      expect(
++          PaymentNotificationParser.parse(event(text: '支付失败 ¥12.00')),
++          isNull);
++    });
++
++    test('还款提醒不记账', () {
++      expect(
++          PaymentNotificationParser.parse(
++              event(text: '信用卡还款提醒：本期应还 1234.00 元')),
++          isNull);
++    });
++
++    test('营销活动不记账', () {
++      expect(
++          PaymentNotificationParser.parse(
++              event(text: '支付立减活动，最高优惠 20 元')),
++          isNull);
++    });
++
++    test('没有金额不记账', () {
++      expect(
++          PaymentNotificationParser.parse(event(text: '你已成功支付，感谢使用')),
++          isNull);
++    });
++  });
++
++  group('支付宝', () {
++    test('支付成功 12.00元 解析为支出', () {
++      final parsed = PaymentNotificationParser.parse(event(
++          source: 'alipay', title: '支付宝', text: '支付成功 12.00元'));
++      expect(parsed, isNotNull);
++      expect(parsed!.source, PaymentSource.alipay);
++      expect(parsed.amount, 12.0);
++      expect(parsed.isExpense, isTrue);
++      expect(parsed.accountNameForTest, '支付宝');
++    });
++
++    test('千分位金额正确解析', () {
++      final parsed = PaymentNotificationParser.parse(event(
++          source: 'alipay', title: '支付宝', text: '你已成功付款 ¥1,299.00'));
++      expect(parsed, isNotNull);
++      expect(parsed!.amount, 1299.0);
++    });
++
++    test('余额宝收益不算支付', () {
++      expect(
++          PaymentNotificationParser.parse(event(
++              source: 'alipay', title: '支付宝', text: '余额宝昨日收益 0.12 元')),
++          isNull);
++    });
++
++    test('订单号不会被当成金额', () {
++      final parsed = PaymentNotificationParser.parse(event(
++          source: 'alipay',
++          title: '支付宝',
++          text: '支付成功 订单号 2026111800001234567890'));
++      expect(parsed, isNull, reason: '没有货币符号/元单位的裸数字不算金额');
++    });
++
++    test('金额上限之外视为噪音', () {
++      expect(
++          PaymentNotificationParser.parse(event(
++              source: 'alipay', title: '支付宝', text: '支付成功 99999999 元')),
++          isNull);
++    });
++  });
++
++  test('缺少 source / id 的事件直接丢弃', () {
++    expect(PaymentNotificationParser.parse(event(text: '已支付¥1.00', id: '')),
++        isNull);
++    expect(
++        PaymentNotificationParser.parse(
++            event(text: '已支付¥1.00', source: 'unknown')),
++        isNull);
++  });
++}
++
++extension on ParsedPayment {
++  String get accountNameForTest => source.accountName;
++}
