@@ -7,6 +7,7 @@ import 'package:intl/intl.dart' as intl;
 
 import 'app_localizations_en.dart';
 import 'app_localizations_ko.dart';
+import 'app_localizations_ru.dart';
 import 'app_localizations_zh.dart';
 
 // ignore_for_file: type=lint
@@ -94,6 +95,7 @@ abstract class AppLocalizations {
   static const List<Locale> supportedLocales = <Locale>[
     Locale('en'),
     Locale('ko'),
+    Locale('ru'),
     Locale('zh'),
     Locale('zh', 'TW')
   ];
@@ -1170,7 +1172,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Are you sure you want to delete the selected {count} transactions?\nThis action cannot be undone.'**
-  String searchBatchDeleteConfirmMessage(Object count);
+  String searchBatchDeleteConfirmMessage(int count);
 
   /// No description provided for @searchBatchSetNoteTitle.
   ///
@@ -1194,7 +1196,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Successfully deleted {count} transactions'**
-  String searchBatchDeleteSuccess(Object count);
+  String searchBatchDeleteSuccess(int count);
 
   /// No description provided for @searchBatchDeleteFailed.
   ///
@@ -1230,7 +1232,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'{count} results'**
-  String searchResultsCount(Object count);
+  String searchResultsCount(int count);
 
   /// No description provided for @searchSummaryIncome.
   ///
@@ -2274,7 +2276,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Skipped {count} non-transaction records (debts, etc.)'**
-  String importSkippedNonTransactionTypes(Object count);
+  String importSkippedNonTransactionTypes(int count);
 
   /// No description provided for @importTransactionFailed.
   ///
@@ -4020,7 +4022,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'This category has {count} transaction records. Please handle them first.'**
-  String categoryCannotDeleteMessage(Object count);
+  String categoryCannotDeleteMessage(int count);
 
   /// No description provided for @categoryShare.
   ///
@@ -4050,7 +4052,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Are you sure you want to delete {count} unused categories? This action cannot be undone.'**
-  String categoryClearUnusedMessage(Object count);
+  String categoryClearUnusedMessage(int count);
 
   /// No description provided for @categoryClearUnusedListTitle.
   ///
@@ -4068,7 +4070,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Deleted {count} categories'**
-  String categoryClearUnusedSuccess(Object count);
+  String categoryClearUnusedSuccess(int count);
 
   /// No description provided for @categoryClearUnusedFailed.
   ///
@@ -14574,7 +14576,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'Reconverted {count} foreign-currency transactions'**
-  String recalcForeignTxDone(Object count);
+  String recalcForeignTxDone(int count);
 
   /// No description provided for @txCurrencyPickerTitle.
   ///
@@ -14586,7 +14588,7 @@ abstract class AppLocalizations {
   ///
   /// In en, this message translates to:
   /// **'{count} transactions will be reconverted and synced'**
-  String recalcSyncCountHint(Object count);
+  String recalcSyncCountHint(int count);
 
   /// No description provided for @exportCsvHeaderCurrency.
   ///
@@ -17522,6 +17524,54 @@ abstract class AppLocalizations {
   /// **'Use full summary'**
   String get v4HomeUseStandardSummary;
 
+  /// No description provided for @v4HomeSummaryStyle.
+  ///
+  /// In en, this message translates to:
+  /// **'Summary style'**
+  String get v4HomeSummaryStyle;
+
+  /// No description provided for @v4HomeSummaryFull.
+  ///
+  /// In en, this message translates to:
+  /// **'Full'**
+  String get v4HomeSummaryFull;
+
+  /// No description provided for @v4HomeSummaryCompact.
+  ///
+  /// In en, this message translates to:
+  /// **'Compact'**
+  String get v4HomeSummaryCompact;
+
+  /// No description provided for @v4HomeSummarySliding.
+  ///
+  /// In en, this message translates to:
+  /// **'Sliding'**
+  String get v4HomeSummarySliding;
+
+  /// No description provided for @v4HomeSummaryStyleOption.
+  ///
+  /// In en, this message translates to:
+  /// **'{style} summary'**
+  String v4HomeSummaryStyleOption(String style);
+
+  /// No description provided for @v4HomeSummaryFullDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Emphasizes spending above income, balance, and budget'**
+  String get v4HomeSummaryFullDescription;
+
+  /// No description provided for @v4HomeSummaryCompactDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Shows the budget ring with spending, income, and balance'**
+  String get v4HomeSummaryCompactDescription;
+
+  /// No description provided for @v4HomeSummarySlidingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Keeps the budget ring in place while you swipe between totals'**
+  String get v4HomeSummarySlidingDescription;
+
   /// No description provided for @v4HomeBudgetExceeded.
   ///
   /// In en, this message translates to:
@@ -17748,7 +17798,7 @@ class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> 
   }
 
   @override
-  bool isSupported(Locale locale) => <String>['en', 'ko', 'zh'].contains(locale.languageCode);
+  bool isSupported(Locale locale) => <String>['en', 'ko', 'ru', 'zh'].contains(locale.languageCode);
 
   @override
   bool shouldReload(_AppLocalizationsDelegate old) => false;
@@ -17770,6 +17820,7 @@ AppLocalizations lookupAppLocalizations(Locale locale) {
   switch (locale.languageCode) {
     case 'en': return AppLocalizationsEn();
     case 'ko': return AppLocalizationsKo();
+    case 'ru': return AppLocalizationsRu();
     case 'zh': return AppLocalizationsZh();
   }
 
