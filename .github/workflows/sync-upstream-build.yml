@@ -201,6 +201,32 @@ jobs:
             || { echo "::error::allowBackup 不是 false，加固未生效"; exit 1; }
           echo "allowBackup=false 已生效"
 
+      # ---------- 收集指纹写进 Release 说明，方便任何人肉眼比对 ----------
+      - name: Collect artifact fingerprints
+        id: fp
+        run: |
+          cd build/app/outputs/flutter-apk
+          {
+            echo "### 校验信息"
+            echo ""
+            echo "| 文件 | 大小 | SHA-256 |"
+            echo "| --- | --- | --- |"
+            for f in *.apk; do
+              echo "| \`$f\` | $(du -h "$f" | cut -f1) | \`$(sha256sum "$f" | cut -d' ' -f1)\` |"
+            done
+            echo ""
+            echo "签名指纹（SHA-256）：\`$EXPECTED_SIGNER_SHA256\`"
+            echo ""
+            echo '装之前先用仓库里的 tools/verify-apk-signature.ps1 核对，或手动跑：'
+            echo ""
+            echo 'apksigner verify --print-certs app-arm64-v8a-prod-release.apk'
+          } > "$RUNNER_TEMP/fingerprints.md"
+          {
+            echo "body<<__BODY_EOF__"
+            cat "$RUNNER_TEMP/fingerprints.md"
+            echo "__BODY_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -218,5 +244,7 @@ jobs:
             - `allowBackup=false`：本地账本不能被 adb/云备份导出
             - 构建前过了敏感权限、危险 API 两道护栏
             - 产物已校验签名指纹与 `allowBackup` 标记
+
+            ${{ steps.fp.outputs.body }}
           files: build/app/outputs/flutter-apk/*.apk
           fail_on_unmatched_files: true
