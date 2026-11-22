@@ -1,16 +1,16 @@
-name: Sync upstream and build APK
+name: Sync upstream and build hardened APK
 
-# 用途：你的仓库只比上游多两个文件（本工作流 + 功能补丁），其他全是上游原样。
+# 这个仓库 = 上游 BeeCount + 两个改动（关备份 + 本工作流），不含任何自加业务功能。
 #
-#   1) sync：每天把 TNT-Likely/BeeCount@main 合进你的 main（几乎不会冲突）
-#   2) build：在 main 上应用功能补丁 → 生成 auto-billing 分支 → 构建签名 APK → 发 Release
-#
-# 好处：不需要在本机 clone 1GB 仓库、不需要本地 git；补丁应用失败会红灯，
-# 不会静默丢功能。
+# 工作流做四件事：
+#   1. 上游发新 Release 时才合并（不再每天盲跟 main），减少供应链暴露面；
+#   2. 合并后过三道护栏：敏感权限 / 危险 API / 硬编码外联域名；
+#   3. 用固定密钥构建 APK，并用 apksigner 校验签名指纹，防止产物被换签；
+#   4. 校验产物里 allowBackup 确实是 false，发 Release。
 
 on:
   schedule:
-    # 每天 UTC 20:00 = 北京时间 04:00
+    # 每天北京时间 04:00 检查上游是否发了新 Release
     - cron: '0 20 * * *'
   workflow_dispatch:
 
@@ -22,13 +22,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PATCH_FILE: 0001-feat-auto-billing.patch
-  FEATURE_BRANCH: auto-billing
+  TAG_MARKER: .beecount-last-upstream-tag
+  # 你自己的签名证书指纹（CN=BeeCount AutoBill）。构建完必须与此一致，否则红灯。
+  EXPECTED_SIGNER_SHA256: "2e7bce613ecbbc46afc640f8b26755992ce91e52ce2ff1de6dc4cf4527ebdc2c"
 
 jobs:
   sync:
-    name: Merge upstream into main
+    name: Merge upstream (only on new release)
     runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.release.outputs.new }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,48 +49,78 @@ jobs:
           git remote add upstream https://github.com/TNT-Likely/BeeCount.git || true
           git fetch upstream main
 
+      - name: Resolve latest upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+                https://api.github.com/repos/TNT-Likely/BeeCount/releases/latest \
+                | python3 -c "import sys,json;print(json.load(sys.stdin).get('tag_name','').strip())" \
+                || true)
+          LAST=$(cat "$TAG_MARKER" 2>/dev/null || echo "")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$TAG" ] && [ "$TAG" != "$LAST" ]; then
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "上游新版本: $TAG（上次: ${LAST:-无}）"
+          else
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "上游版本无变化（$TAG），跳过"
+          fi
+
       - name: Merge upstream/main
+        if: steps.release.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           if ! git merge --no-edit upstream/main; then
             git merge --abort || true
-            echo "::error::上游改动与仓库里的文件冲突，需要人工合并"
+            echo "::error::上游改动与本地改动冲突（大概率是 AndroidManifest.xml），需要人工合并"
             exit 1
           fi
 
-      - name: Push main
-        run: git push origin HEAD:main
+      - name: Record release tag
+        if: steps.release.outputs.new == 'true' && github.event_name != 'workflow_dispatch'
+        run: |
+          echo "${{ steps.release.outputs.tag }}" > "$TAG_MARKER"
+          git add "$TAG_MARKER"
+          git commit -m "chore: 记录已跟进的上游版本 ${{ steps.release.outputs.tag }}"
+          git push origin HEAD:main
 
   build:
-    name: Apply feature patch and build
+    name: Guard, build and verify
     needs: sync
+    if: needs.sync.outputs.new_release == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure git
+      # ---------- 护栏 1：敏感权限 ----------
+      - name: Guard - sensitive permissions
         run: |
-          git config user.name "beecount-sync-bot"
-          git config user.email "beecount-sync-bot@users.noreply.github.com"
-
-      # 在 main 基础上生成/刷新功能分支；补丁打不上就红灯
-      - name: Apply feature patch
-        run: |
-          git checkout -B "$FEATURE_BRANCH"
-          if git am -3 "$PATCH_FILE"; then
-            echo "applied with git am"
-          else
-            git am --abort || true
-            echo "::warning::git am 失败，改用 git apply --3way"
-            git apply --3way "$PATCH_FILE"
-            git add -A
-            git commit -m "feat(auto-billing): 支付宝/微信支付通知自动记账"
+          BAD='SEND_SMS|READ_SMS|RECEIVE_SMS|READ_CONTACTS|WRITE_CONTACTS|READ_CALL_LOG|CALL_LOG|PROCESS_OUTGOING_CALLS|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION|QUERY_ALL_PACKAGES|READ_PHONE_STATE|READ_PHONE_NUMBERS|MANAGE_EXTERNAL_STORAGE|SYSTEM_ALERT_WINDOW|BIND_DEVICE_ADMIN|BIND_ACCESSIBILITY_SERVICE'
+          echo "== 当前清单权限 =="
+          grep -oE 'android.permission.[A-Z_]+' android/app/src/main/AndroidManifest.xml | sort -u || true
+          if grep -nEq "$BAD" android/app/src/main/AndroidManifest.xml; then
+            echo "::error::清单出现敏感权限（短信/通讯录/定位/QUERY_ALL_PACKAGES/无障碍等），需人工确认"
+            grep -nE "$BAD" android/app/src/main/AndroidManifest.xml
+            exit 1
           fi
 
-      - name: Push feature branch
-        run: git push -f origin "HEAD:$FEATURE_BRANCH"
+      # ---------- 护栏 2：危险 API ----------
+      - name: Guard - dangerous APIs in app source
+        run: |
+          PATTERNS='DexClassLoader|InMemoryDexClassLoader|PathClassLoader|Runtime\.getRuntime\(\)\.exec|ProcessBuilder|System\.load\(|loadDex|createPackageContext'
+          if grep -rnE "$PATTERNS" android/app/src/main --include=*.kt --include=*.java --include=*.xml; then
+            echo "::error::本地代码出现动态加载/执行外部程序的调用，需人工确认"
+            exit 1
+          fi
+          echo "未发现动态加载、命令执行类调用"
+
+      # ---------- 护栏 3：外联域名清单（只报告，不拦截） ----------
+      - name: Report - outbound domains in Dart code
+        run: |
+          echo "== lib/ 里出现的域名（供人工比对，异常域名请排查）=="
+          grep -rhoE 'https?://[a-zA-Z0-9.\-]+' lib --include=*.dart \
+            | sed -E 's#https?://##' | sort -u | head -60 || true
 
       - uses: actions/setup-java@v4
         with:
@@ -99,8 +133,6 @@ jobs:
           channel: stable
           cache: true
 
-      # 固定签名：没配 Secret 时会退回 CI 临时签名，那种包每次签名都不同，
-      # 手机只能卸载重装（账本会丢），仅用于验证构建。
       - name: Restore release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -109,8 +141,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次用临时签名，无法覆盖升级旧安装"
-            exit 0
+            echo "::error::未配置 ANDROID_KEYSTORE_BASE64，拒绝产出无法验证签名的包"
+            exit 1
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > android/upload-keystore.jks
           cat > android/key.properties <<EOF
@@ -123,19 +155,6 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
-      # 只分析本功能相关文件：上游自带的 packages/agentcore 测试目录在独立
-      # pub 解析下本来就有几百个报错，全量 analyze 会永远红灯。
-      - name: Analyze (feature files only)
-        run: |
-          flutter analyze --no-fatal-infos \
-            lib/services/automation \
-            lib/providers/payment_notification_providers.dart \
-            lib/pages/automation/payment_notification_settings_page.dart
-
-      - name: Unit tests
-        run: flutter test test/services/automation/payment_notification_parser_test.dart
-
-      # 版本号自动跟随上游最新 Release（如 4.0.0 / v4.1.0），拿不到就退回 4.0.0
       - name: Resolve version name from upstream
         id: version
         env:
@@ -151,11 +170,36 @@ jobs:
           echo "上游版本号 = $NAME"
 
       - name: Build APK
-        # versionCode 必须递增，否则手机无法覆盖安装；首次 = 301（官方 4.0.0 = 300）
         run: |
           flutter build apk --flavor prod --release \
             --build-name=${{ steps.version.outputs.name }} \
-            --build-number=$((300 + ${{ github.run_number }}))
+            --build-number=$((1000 + ${{ github.run_number }}))
+
+      # ---------- 护栏 4：产物签名指纹 ----------
+      - name: Verify APK signature
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          SIGNER=$(find "$SDK/build-tools" -name apksigner | sort -V | tail -1)
+          APK=$(ls build/app/outputs/flutter-apk/app-prod-release.apk)
+          echo "== 签名校验: $APK =="
+          "$SIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt
+          ACTUAL=$(grep -m1 'SHA-256 digest' /tmp/certs.txt | sed -E 's/.*digest: *//')
+          if [ "$ACTUAL" != "$EXPECTED_SIGNER_SHA256" ]; then
+            echo "::error::签名指纹不匹配！期望 $EXPECTED_SIGNER_SHA256，实际 $ACTUAL"
+            exit 1
+          fi
+          echo "签名指纹一致"
+
+      # ---------- 护栏 5：加固项真的生效 ----------
+      - name: Verify hardening flags in APK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          AAPT=$(find "$SDK/build-tools" -name aapt2 | sort -V | tail -1)
+          APK=build/app/outputs/flutter-apk/app-prod-release.apk
+          OUT=$("$AAPT" dump xmltree --file AndroidManifest.xml "$APK")
+          echo "$OUT" | grep -q 'allowBackup(0x01010280)=false' \
+            || { echo "::error::allowBackup 不是 false，加固未生效"; exit 1; }
+          echo "allowBackup=false 已生效"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -168,9 +212,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: BeeCount ${{ steps.version.outputs.name }} + 支付通知自动记账 #${{ github.run_number }}
+          name: BeeCount ${{ steps.version.outputs.name }} 加固版 #${{ github.run_number }}
           body: |
-            自动构建：上游 `TNT-Likely/BeeCount@main`（versionName ${{ steps.version.outputs.name }}）+ 功能补丁 `0001-feat-auto-billing.patch`。
-            功能说明见仓库根目录 `0001-feat-auto-billing.patch` 的提交信息。
+            上游 `TNT-Likely/BeeCount` 最新 Release 的加固构建（**不含**任何自加业务功能）：
+            - `allowBackup=false`：本地账本不能被 adb/云备份导出
+            - 构建前过了敏感权限、危险 API 两道护栏
+            - 产物已校验签名指纹与 `allowBackup` 标记
           files: build/app/outputs/flutter-apk/*.apk
           fail_on_unmatched_files: true
