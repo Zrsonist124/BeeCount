@@ -106,7 +106,7 @@ class UpdateChecker {
         try {
           logger.info('UpdateChecker', '尝试第$attempts次请求GitHub API...');
           resp = await _dio.get(
-            'https://api.github.com/repos/TNT-Likely/BeeCount/releases/latest',
+            'https://api.github.com/repos/Zrsonist124/BeeCount/releases/latest',
             options: Options(
               headers: {
                 'Accept': 'application/vnd.github+json',
@@ -142,6 +142,40 @@ class UpdateChecker {
         final latestVersion = _normalizeVersion(data['tag_name']);
 
         logger.info('UpdateChecker', '最新版本: $latestVersion');
+
+        // 自建构建的 Release 用 `build-<运行序号>` 当 tag（见 sync-upstream-build.yml），
+        // 语义化版本比较套不上，改按 versionCode 比较：CI 里 versionCode = 1000 + 序号。
+        final buildTag = RegExp(r'^build-(\d+)$')
+            .firstMatch((data['tag_name'] ?? '').toString());
+        if (buildTag != null) {
+          final candidate = 1000 + (int.tryParse(buildTag.group(1)!) ?? 0);
+          final current = int.tryParse(currentInfo.buildNumber) ?? 0;
+          logger.info('UpdateChecker',
+              '自建包按 build 比较: candidate=$candidate current=$current');
+          if (candidate > current) {
+            final apkUrl = _pickApkByAbi(data['assets'] as List);
+            if (apkUrl != null) {
+              // 弹窗里只显示语义化版本（从 Release 标题里取 4.0.1）。
+              // 万一标题里没有版本号，宁可留空（弹窗显示「发现新版本」），
+              // 也不要把内部的 build-<序号> 暴露给用户。
+              final releaseName = (data['name'] ?? '').toString();
+              final display = RegExp(r'(\d+\.\d+\.\d+)')
+                      .firstMatch(releaseName)
+                      ?.group(1) ??
+                  '';
+              return UpdateResult(
+                hasUpdate: true,
+                version: display,
+                downloadUrl: apkUrl,
+                releaseNotes: _cleanReleaseNotes(data['body'] ?? ''),
+              );
+            }
+          }
+          return UpdateResult(
+            hasUpdate: false,
+            message: '__UPDATE_ALREADY_LATEST_SIMPLE__',
+          );
+        }
 
         if (_isNewerVersion(latestVersion, currentVersion)) {
           // 找到 APK 下载链接 — v3.2.1 起 Release 含多个 APK(arm64 主包 /
@@ -220,6 +254,25 @@ class UpdateChecker {
     if (apkByName.containsKey(mainPkgName)) return apkByName[mainPkgName];
     if (apkByName.containsKey(universalName)) return apkByName[universalName];
     return apkByName.values.first;
+  }
+
+  /// 自建 Release 的资产名是 `app-<abi>-prod-release.apk` / `app-prod-release.apk`，
+  /// 按 ABI 优先级挑（arm64 真机优先，universal 兜底）。
+  static String? _pickApkByAbi(List assets) {
+    final apks = <String, String>{};
+    for (final asset in assets) {
+      final name = asset['name'].toString();
+      if (name.endsWith('.apk')) {
+        apks[name] = asset['browser_download_url'].toString();
+      }
+    }
+    if (apks.isEmpty) return null;
+    for (final abi in const ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'universal']) {
+      for (final entry in apks.entries) {
+        if (entry.key.contains(abi)) return entry.value;
+      }
+    }
+    return apks.values.first;
   }
 
   // 辅助方法
