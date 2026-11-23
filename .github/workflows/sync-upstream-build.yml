@@ -71,10 +71,34 @@ jobs:
       - name: Merge upstream/main
         if: steps.release.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
         run: |
+          BASE=$(git rev-parse HEAD)
           if ! git merge --no-edit upstream/main; then
-            git merge --abort || true
-            echo "::error::上游改动与本地改动冲突（大概率是 AndroidManifest.xml），需要人工合并"
-            exit 1
+            # 只容许「AndroidManifest.xml」这一处冲突：取上游版本，再把我们的加固两行补回去
+            CONFLICTS=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+            echo "冲突文件: $CONFLICTS"
+            if [ "$CONFLICTS" = "android/app/src/main/AndroidManifest.xml " ]; then
+              git checkout --theirs android/app/src/main/AndroidManifest.xml
+              if ! grep -q 'allowBackup' android/app/src/main/AndroidManifest.xml; then
+                sed -i 's|android:requestLegacyExternalStorage="true"|android:requestLegacyExternalStorage="true"\n        android:allowBackup="false"\n        android:fullBackupContent="false"|' android/app/src/main/AndroidManifest.xml
+              fi
+              git add android/app/src/main/AndroidManifest.xml
+              git commit --no-edit
+              echo "已自动合并 AndroidManifest.xml 并补回 allowBackup=false"
+            else
+              git merge --abort || true
+              echo "::error::冲突不在预期范围，需要人工合并"
+              exit 1
+            fi
+          fi
+          # GITHUB_TOKEN 无权推送包含 workflow 文件变更的提交：
+          #   refusing to allow a GitHub App to create or update workflow ... without workflows permission
+          # 我们的构建只用 sync-upstream-build.yml，与上游 CI 无关，所以把 .github/workflows
+          # 恢复到合并前版本（上游对 workflow 的改动直接忽略），再补一个提交。
+          if ! git diff --quiet "$BASE" HEAD -- .github/workflows; then
+            git rm -r --quiet --ignore-unmatch .github/workflows
+            git checkout "$BASE" -- .github/workflows
+            git commit -q -m "chore: 保留本地 .github/workflows（规避 GITHUB_TOKEN 无 workflow 写权限）"
+            echo "已忽略上游对 .github/workflows 的改动"
           fi
 
       - name: Record release tag
