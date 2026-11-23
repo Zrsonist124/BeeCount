@@ -6,9 +6,9 @@ App 仓维护 `scripts/qa/isolated_app_cloud.py`、`scripts/qa/test_isolation.py
 
 纯 App 改动默认使用独立设备、本地新数据库和合成数据，执行相关真实 UI、正常入口重启及持久化检查，不启动 Cloud、不创建服务账号、不构建 Web，也无需 Cloud checkout、服务端 Python 依赖或 pnpm。报告注明 Cloud 与双向同步“不适用（仅 App）”。
 
-保留同样的隔离身份核验：私有 run 与所有权标记、源码/skill hash、原有设备保护名单、新 UDID/serial、独立包和共享容器、安装前产物核验及已有 QA 数据备份。按被测功能设置本地 fixture 和可见断言；交接同一正常入口 App，清理实际创建的本轮资源。
+保留同样的隔离身份核验：私有 run 与所有权标记、源码/skill hash、原有设备保护名单、run 所属的 UDID/serial、独立包和共享容器、安装前产物核验及已有 QA 数据备份。按被测功能设置本地 fixture 和可见断言；交接同一正常入口 App，清理实际创建的本轮资源。
 
-`isolated_app_cloud.py prepare` 目前是联调入口，会无条件准备并启动 Cloud；没有仅 App 开关。仅 App 不执行下方联调命令，也不为套用默认交易复制用例而启动 Cloud。复用所需的源码副本、产物和设备核验能力，按实际独立 App 入口执行；需要适配测试驱动时移除 Cloud 探针、鉴权、同步 fixture 及 Cloud 特有的可见文字依赖，不能伪造服务成功结果。现有 `notification_badge_check.py` 依赖已完成联调的正常入口 App，仅用于复用该类 run，不作为纯 App 验收必须启动 Cloud 的理由。
+`isolated_app_cloud.py prepare` 默认启动 Cloud。仅 App 用 prepare --app-only 准备一台隔离 iOS 模拟器，然后 build 和 run；review 复用原有安装及数据，restart-check 重启正常 App。重复 prepare 时传同一个 --round，默认复用同运行时的已登记设备。确有需要时才加 --new-run。Android 使用下方私有 AVD 入口。复用所需的源码副本、产物和设备核验能力，按实际独立 App 入口执行；需要适配测试驱动时移除 Cloud 探针、鉴权、同步 fixture 及 Cloud 特有的可见文字依赖，不能伪造服务成功结果。现有 `notification_badge_check.py` 依赖已完成联调的正常入口 App，仅用于复用该类 run，不作为纯 App 验收必须启动 Cloud 的理由。
 
 ### Android 角标专项
 
@@ -37,7 +37,7 @@ python3 scripts/qa/isolated_app_cloud.py prepare \
   --flutter <Flutter可执行文件>
 ```
 
-`prepare` 打印本次私有 run 路径、新 UDID 和 loopback Cloud origin。使用实际打印路径，不复制以前运行的值。
+`prepare` 会创建私有 run 和模拟器，并打印 run 路径、UDID 和 loopback Cloud origin。同一功能已有身份和场景均匹配的本轮 run 时，用该目录执行后续命令和重试。人工验收交接后用 `review` 恢复。
 
 ```sh
 qa_run_dir='<本次打印的run目录>'
@@ -66,7 +66,7 @@ MCP 场景使用 `prepare --scenario mcp-receipt-attachments --cloud-ref <功能
 
 QA 主包 `com.tntlikely.beecount.qa`，扩展 `.qa.BeeCountWidgetExtension`，App Group `group.com.tntlikely.beecount.qa`；所有已有模拟器受保护。产物身份不符时不可安装。
 
-`restart-check` 用项目 CocoaPods 已使用的 Ruby `xcodeproj` 生成原生 UI 测试工程。构建后的 `.qa.smoke.xctrunner` / `.qa.smoke` ID 先核验，再在同一新 UDID 处理首次通知权限弹窗、断言复制交易与金额可见；不启用并行模拟器克隆。
+`restart-check` 用项目 CocoaPods 已使用的 Ruby `xcodeproj` 生成原生 UI 测试工程。构建后的 `.qa.smoke.xctrunner` / `.qa.smoke` ID 先核验，再在同一 UDID 处理首次通知权限弹窗、断言复制交易与金额可见；不启用并行模拟器克隆。
 
 `evidence/` 下：逐项 `acceptance.json`、真实 Cloud `cloud-projection.json`、`environment.json`、正常入口 `restart-persistence.json` 和合成数据截图。environment 还记录原生 UI 测试退出码；不能仅凭进程存活和数据库有数据判定正常入口完成。原始日志、credentials/env、构建产物、原生 xcresult 及 `private-backups/` 留在私有 run，不复制到 PR。
 
@@ -78,4 +78,4 @@ QA 主包 `com.tntlikely.beecount.qa`，扩展 `.qa.BeeCountWidgetExtension`，A
 
 完整验收结果在忽略目录或仓库外制作离线 HTML 与 ZIP，不提交到功能分支。用界面截图、操作流程和本地结果展示结论，联调时再附 App/Cloud 对照；仅 App 无需 Cloud projection 或 Web 交接。按场景分组列实际断言，技术元数据与 JSON 放折叠附录。包内加入打开说明、manifest 与 SHA256 校验表；不得复制包含私人路径的原始 run manifest。
 
-PR 保留简短结论、覆盖范围和跨仓依赖。已有授权目标 PR 时按 [PR 验收交接](pr-lifecycle.md) 自动发布报告 ZIP 与关键截图，保存此轮资源和 PR 的关联。
+已有授权目标 PR 时按 [PR 验收交接](pr-lifecycle.md) 发布完整报告和附件，登记各 PR 与本轮资源的关联。跨仓 PR 各自保留验收摘要、覆盖范围与依赖，并共用一份验收报告。

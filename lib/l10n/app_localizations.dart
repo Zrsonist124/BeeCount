@@ -9451,7 +9451,7 @@ abstract class AppLocalizations {
   /// No description provided for @appearanceSettingsDesc.
   ///
   /// In en, this message translates to:
-  /// **'Theme, font, language, app lock, etc.'**
+  /// **'Theme, text size, language, app lock, etc.'**
   String get appearanceSettingsDesc;
 
   /// No description provided for @appearanceSettingsPageTitle.
@@ -17787,6 +17787,168 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Due bills are recorded when you open or return to the app. Tap a rule to edit its schedule.'**
   String get v4RecurringUsageSummary;
+
+  /// No description provided for @fullDataExportTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Export all data'**
+  String get fullDataExportTitle;
+
+  /// No description provided for @fullDataExportSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'All ledgers, image attachments, and settings · ZIP'**
+  String get fullDataExportSubtitle;
+
+  /// No description provided for @fullDataExportDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Package all ledgers on this device into one ZIP. Open it to browse CSV records and image attachments by ledger name.'**
+  String get fullDataExportDescription;
+
+  /// No description provided for @fullDataExportLedgers.
+  ///
+  /// In en, this message translates to:
+  /// **'All ledgers and records'**
+  String get fullDataExportLedgers;
+
+  /// No description provided for @fullDataExportAttachments.
+  ///
+  /// In en, this message translates to:
+  /// **'Image attachments'**
+  String get fullDataExportAttachments;
+
+  /// No description provided for @fullDataExportConfiguration.
+  ///
+  /// In en, this message translates to:
+  /// **'Accounts, categories, tags, and other settings'**
+  String get fullDataExportConfiguration;
+
+  /// No description provided for @fullDataExportPrivacy.
+  ///
+  /// In en, this message translates to:
+  /// **'The ZIP contains personal bookkeeping data. Keep it somewhere safe.'**
+  String get fullDataExportPrivacy;
+
+  /// No description provided for @fullDataExportGenerate.
+  ///
+  /// In en, this message translates to:
+  /// **'Generate ZIP'**
+  String get fullDataExportGenerate;
+
+  /// No description provided for @fullDataExportGenerating.
+  ///
+  /// In en, this message translates to:
+  /// **'Generating ZIP…'**
+  String get fullDataExportGenerating;
+
+  /// No description provided for @fullDataExportReady.
+  ///
+  /// In en, this message translates to:
+  /// **'ZIP ready · {ledgers, plural, one{1 ledger} other{{ledgers} ledgers}} · {attachments, plural, one{1 image file} other{{attachments} image files}}'**
+  String fullDataExportReady(int ledgers, int attachments);
+
+  /// No description provided for @fullDataExportMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, one{One file is unavailable.} other{{count} files are unavailable.}} See missing_files.csv for details.'**
+  String fullDataExportMissing(int count);
+
+  /// No description provided for @fullDataExportShare.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or share ZIP'**
+  String get fullDataExportShare;
+
+  /// No description provided for @fullDataExportAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Generate again'**
+  String get fullDataExportAgain;
+
+  /// No description provided for @fullDataExportError.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not generate the ZIP. Check available storage and try again.'**
+  String get fullDataExportError;
+
+  /// No description provided for @fullDataExportShareError.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open the share sheet. Try again.'**
+  String get fullDataExportShareError;
+
+  /// No description provided for @transactionMoveAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Move to ledger'**
+  String get transactionMoveAction;
+
+  /// No description provided for @transactionMoveChooseLedger.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a destination ledger'**
+  String get transactionMoveChooseLedger;
+
+  /// No description provided for @transactionMoveNoTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose another personal ledger with the same base currency.'**
+  String get transactionMoveNoTarget;
+
+  /// No description provided for @transactionMoveConfirmTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm move'**
+  String get transactionMoveConfirmTitle;
+
+  /// No description provided for @transactionMoveConfirmMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, one{Move one transaction from “{source}” to “{target}”.} other{Move {count} transactions from “{source}” to “{target}”.}}'**
+  String transactionMoveConfirmMessage(int count, String source, String target);
+
+  /// No description provided for @transactionMoveCommit.
+  ///
+  /// In en, this message translates to:
+  /// **'Move'**
+  String get transactionMoveCommit;
+
+  /// No description provided for @transactionMoveWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Moving transactions'**
+  String get transactionMoveWorking;
+
+  /// No description provided for @transactionMoveDone.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, one{Moved one transaction} other{Moved {count} transactions}}'**
+  String transactionMoveDone(int count);
+
+  /// No description provided for @transactionMoveChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The ledger or selected transactions changed. Refresh and select again.'**
+  String get transactionMoveChanged;
+
+  /// No description provided for @transactionMoveUnsynced.
+  ///
+  /// In en, this message translates to:
+  /// **'Sync both ledgers and their attachments before moving.'**
+  String get transactionMoveUnsynced;
+
+  /// No description provided for @transactionMovePending.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for cloud confirmation. The app will retry when it reconnects.'**
+  String get transactionMovePending;
+
+  /// No description provided for @transactionMoveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not move the transactions. Check your connection and try again.'**
+  String get transactionMoveFailed;
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

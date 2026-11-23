@@ -9475,4 +9475,123 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get v4RecurringUsageSummary => '앱을 열거나 돌아오면 예정된 거래가 자동으로 기록됩니다. 규칙을 눌러 일정을 수정하세요.';
+
+  @override
+  String get fullDataExportTitle => 'Export all data';
+
+  @override
+  String get fullDataExportSubtitle => 'All ledgers, image attachments, and settings · ZIP';
+
+  @override
+  String get fullDataExportDescription => 'Package all ledgers on this device into one ZIP. Open it to browse CSV records and image attachments by ledger name.';
+
+  @override
+  String get fullDataExportLedgers => 'All ledgers and records';
+
+  @override
+  String get fullDataExportAttachments => 'Image attachments';
+
+  @override
+  String get fullDataExportConfiguration => 'Accounts, categories, tags, and other settings';
+
+  @override
+  String get fullDataExportPrivacy => 'The ZIP contains personal bookkeeping data. Keep it somewhere safe.';
+
+  @override
+  String get fullDataExportGenerate => 'Generate ZIP';
+
+  @override
+  String get fullDataExportGenerating => 'Generating ZIP…';
+
+  @override
+  String fullDataExportReady(int ledgers, int attachments) {
+    String _temp0 = intl.Intl.pluralLogic(
+      ledgers,
+      locale: localeName,
+      other: '$ledgers ledgers',
+      one: '1 ledger',
+    );
+    String _temp1 = intl.Intl.pluralLogic(
+      attachments,
+      locale: localeName,
+      other: '$attachments image files',
+      one: '1 image file',
+    );
+    return 'ZIP ready · $_temp0 · $_temp1';
+  }
+
+  @override
+  String fullDataExportMissing(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count files are unavailable.',
+      one: 'One file is unavailable.',
+    );
+    return '$_temp0 See missing_files.csv for details.';
+  }
+
+  @override
+  String get fullDataExportShare => 'Save or share ZIP';
+
+  @override
+  String get fullDataExportAgain => 'Generate again';
+
+  @override
+  String get fullDataExportError => 'Could not generate the ZIP. Check available storage and try again.';
+
+  @override
+  String get fullDataExportShareError => 'Could not open the share sheet. Try again.';
+
+  @override
+  String get transactionMoveAction => 'Move to ledger';
+
+  @override
+  String get transactionMoveChooseLedger => 'Choose a destination ledger';
+
+  @override
+  String get transactionMoveNoTarget => 'Choose another personal ledger with the same base currency.';
+
+  @override
+  String get transactionMoveConfirmTitle => 'Confirm move';
+
+  @override
+  String transactionMoveConfirmMessage(int count, String source, String target) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Move $count transactions from “$source” to “$target”.',
+      one: 'Move one transaction from “$source” to “$target”.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transactionMoveCommit => 'Move';
+
+  @override
+  String get transactionMoveWorking => 'Moving transactions';
+
+  @override
+  String transactionMoveDone(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Moved $count transactions',
+      one: 'Moved one transaction',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get transactionMoveChanged => 'The ledger or selected transactions changed. Refresh and select again.';
+
+  @override
+  String get transactionMoveUnsynced => 'Sync both ledgers and their attachments before moving.';
+
+  @override
+  String get transactionMovePending => 'Waiting for cloud confirmation. The app will retry when it reconnects.';
+
+  @override
+  String get transactionMoveFailed => 'Could not move the transactions. Check your connection and try again.';
 }

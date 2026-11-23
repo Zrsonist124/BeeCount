@@ -2267,7 +2267,7 @@
   "automationPageTitle": "Automation",
   "automationPageSubtitle": "Recurring transactions and reminder settings",
   "appearanceSettings": "Personalization",
-  "appearanceSettingsDesc": "Theme, font, language, app lock, etc.",
+  "appearanceSettingsDesc": "Theme, text size, language, app lock, etc.",
   "appearanceSettingsPageTitle": "Personalization",
   "appearanceSettingsPageSubtitle": "Appearance, display, security and other app preferences",
   "about": "About",
@@ -4918,6 +4918,70 @@
     "placeholders": {
       "when": {
         "type": "String"
+      }
+    }
+  },
+  "fullDataExportTitle": "Export all data",
+  "fullDataExportSubtitle": "All ledgers, image attachments, and settings · ZIP",
+  "fullDataExportDescription": "Package all ledgers on this device into one ZIP. Open it to browse CSV records and image attachments by ledger name.",
+  "fullDataExportLedgers": "All ledgers and records",
+  "fullDataExportAttachments": "Image attachments",
+  "fullDataExportConfiguration": "Accounts, categories, tags, and other settings",
+  "fullDataExportPrivacy": "The ZIP contains personal bookkeeping data. Keep it somewhere safe.",
+  "fullDataExportGenerate": "Generate ZIP",
+  "fullDataExportGenerating": "Generating ZIP…",
+  "fullDataExportReady": "ZIP ready · {ledgers, plural, one{1 ledger} other{{ledgers} ledgers}} · {attachments, plural, one{1 image file} other{{attachments} image files}}",
+  "fullDataExportMissing": "{count, plural, one{One file is unavailable.} other{{count} files are unavailable.}} See missing_files.csv for details.",
+  "fullDataExportShare": "Save or share ZIP",
+  "fullDataExportAgain": "Generate again",
+  "fullDataExportError": "Could not generate the ZIP. Check available storage and try again.",
+  "fullDataExportShareError": "Could not open the share sheet. Try again.",
+  "@fullDataExportReady": {
+    "placeholders": {
+      "ledgers": {
+        "type": "int"
+      },
+      "attachments": {
+        "type": "int"
+      }
+    }
+  },
+  "@fullDataExportMissing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "transactionMoveAction": "Move to ledger",
+  "transactionMoveChooseLedger": "Choose a destination ledger",
+  "transactionMoveNoTarget": "Choose another personal ledger with the same base currency.",
+  "transactionMoveConfirmTitle": "Confirm move",
+  "transactionMoveConfirmMessage": "{count, plural, one{Move one transaction from “{source}” to “{target}”.} other{Move {count} transactions from “{source}” to “{target}”.}}",
+  "transactionMoveCommit": "Move",
+  "transactionMoveWorking": "Moving transactions",
+  "transactionMoveDone": "{count, plural, one{Moved one transaction} other{Moved {count} transactions}}",
+  "transactionMoveChanged": "The ledger or selected transactions changed. Refresh and select again.",
+  "transactionMoveUnsynced": "Sync both ledgers and their attachments before moving.",
+  "transactionMovePending": "Waiting for cloud confirmation. The app will retry when it reconnects.",
+  "transactionMoveFailed": "Could not move the transactions. Check your connection and try again.",
+  "@transactionMoveConfirmMessage": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      },
+      "source": {
+        "type": "String"
+      },
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "@transactionMoveDone": {
+    "placeholders": {
+      "count": {
+        "type": "int"
       }
     }
   }
