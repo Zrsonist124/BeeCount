@@ -13,6 +13,11 @@ on:
     # 每天北京时间 04:00 检查上游是否发了新 Release
     - cron: '0 20 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: '无新版也强制构建（仅用于重试失败的构建）'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -69,7 +74,7 @@ jobs:
           fi
 
       - name: Merge upstream/main
-        if: steps.release.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
+        if: steps.release.outputs.new == 'true' || inputs.force
         run: |
           BASE=$(git rev-parse HEAD)
           if ! git merge --no-edit upstream/main; then
@@ -102,17 +107,23 @@ jobs:
           fi
 
       - name: Record release tag
-        if: steps.release.outputs.new == 'true' && github.event_name != 'workflow_dispatch'
+        # 关键：手动触发也要写标记，否则每次点 Run workflow 都会误判"有新版本"，
+        # 天天产出内容相同的 build-N
+        if: steps.release.outputs.new == 'true'
         run: |
           echo "${{ steps.release.outputs.tag }}" > "$TAG_MARKER"
           git add "$TAG_MARKER"
-          git commit -m "chore: 记录已跟进的上游版本 ${{ steps.release.outputs.tag }}"
-          git push origin HEAD:main
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: 记录已跟进的上游版本 ${{ steps.release.outputs.tag }}"
+            git push origin HEAD:main
+          else
+            echo "标记未变化，跳过提交"
+          fi
 
   build:
     name: Guard, build and verify
     needs: sync
-    if: needs.sync.outputs.new_release == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.sync.outputs.new_release == 'true' || inputs.force
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
